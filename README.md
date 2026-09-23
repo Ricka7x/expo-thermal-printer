@@ -1,5 +1,7 @@
 # @ricka7x/expo-thermal-printer
 
+[![CI](https://github.com/Ricka7x/expo-thermal-printer/actions/workflows/ci.yml/badge.svg)](https://github.com/Ricka7x/expo-thermal-printer/actions/workflows/ci.yml)
+
 Bluetooth ESC/POS thermal printing for Expo apps on **Android** and **iOS**, plus a dependency-free ESC/POS byte builder.
 
 Receipt layouts are up to each app; this package handles the connection and the ESC/POS bytes.

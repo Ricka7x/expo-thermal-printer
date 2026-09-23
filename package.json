@@ -31,7 +31,7 @@
   "scripts": {
     "build": "rm -rf build && tsc -p tsconfig.build.json",
     "prepare": "npm run build",
-    "test": "node --import tsx --test src/**/*.test.ts examples/**/*.test.ts",
+    "test": "node --import tsx --test 'src/**/*.test.ts' 'examples/**/*.test.ts'",
     "typecheck": "tsc --noEmit",
     "check": "npm run typecheck && npm test && npm run build",
     "preview": "tsx examples/preview.ts"
