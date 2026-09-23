@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.2
+
+- Releases are published from GitHub Actions through npm trusted publishing, with provenance, and get a GitHub Release.
+- `release.sh` bumps, checks, tags and pushes a release.
+
 ## 0.1.1
 
 - Published to npm as `@ricka7x/expo-thermal-printer`.
