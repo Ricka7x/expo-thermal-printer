@@ -1,6 +1,6 @@
 {
   "name": "@ricka7x/expo-thermal-printer",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "license": "MIT",
   "author": "Ricardo Ramirez",
   "description": "Bluetooth ESC/POS thermal printing for Expo apps on Android (Bluetooth Classic) and iOS (BLE), with a dependency-free ESC/POS byte builder.",
