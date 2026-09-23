@@ -1,63 +1,100 @@
 # expo-thermal-printer
 
-Impresión en impresoras térmicas ESC/POS por Bluetooth Classic para apps Expo en **Android**.
+Bluetooth ESC/POS thermal printing for Expo apps on **Android** and **iOS**, plus a dependency-free ESC/POS byte builder.
 
-Salió del proyecto de venta de boletos (app-vendedor), donde se probó con una impresora MP58C6 de 58 mm. Aquí solo está la parte reutilizable; los formatos de ticket de cada proyecto se quedan en ese proyecto.
+Receipt layouts are up to each app; this package handles the connection and the ESC/POS bytes.
 
-## Qué incluye
+## How each platform connects
 
-- **Módulo nativo (Kotlin):** lista impresoras ya vinculadas, conecta por SPP/RFCOMM (con reintentos seguro → inseguro → canal 1), manda los datos en pedazos, detecta cuando la impresora se apaga (broadcast ACL + sondeo cada 4 s) y se reconecta sola cuando vuelve.
-- **Transporte (`transport.ts`):** permisos de Bluetooth en Android 12+, conexión, desconexión, eventos y `printBytes` con ritmo de envío para no desbordar el buffer de la impresora.
-- **`EscPosBuilder` (`escpos.ts`):** constructor de comandos ESC/POS en TypeScript puro, sin dependencias: alineación, negritas, tamaños, líneas de corte, imágenes raster, página de códigos CP850 con acentos y ñ, y respaldo ASCII.
-- **`usePrinterDisconnected`:** hook para mostrar un aviso cuando la impresora se desconecta.
+| | Android | iOS |
+|---|---|---|
+| Transport | Bluetooth Classic (SPP/RFCOMM) | Bluetooth Low Energy (GATT) |
+| Finding the printer | Paired once in Android's Bluetooth settings, listed instantly | BLE scan from the app |
+| `address` | MAC address | CoreBluetooth peripheral UUID (stable per phone) |
+| Auto-reconnect | Yes (ACL broadcast + 4s heartbeat) | Yes (pending reconnect after a drop) |
 
-## Requisitos
+**iOS only works with printers that expose BLE.** iOS doesn't let apps use Bluetooth Classic SPP unless the accessory is MFi certified, and cheap printers aren't. Many 58mm printers are dual mode (Classic + BLE) and work on both platforms. A Classic-only printer works on Android but will never show up in an iOS scan. Check the printer's spec sheet for "BLE" or "Bluetooth 4.0 dual mode" before buying for iOS.
 
-- Expo con **development build** (no funciona en Expo Go, porque trae código nativo).
-- Solo Android. En iOS y web, `isPrintingSupported()` regresa `false`.
-- La impresora se vincula **una vez** desde los ajustes de Bluetooth de Android. El módulo no escanea, así que no pide permiso de ubicación.
+## What's included
 
-## Uso en un proyecto
+- **Native modules:** Kotlin (Android) and Swift/CoreBluetooth (iOS). Both only move bytes; they never format anything.
+  - Android: connects over SPP with fallbacks (secure → insecure → RFCOMM channel 1), writes in small flushed chunks, detects power-off, reconnects when the printer comes back.
+  - iOS: scans, connects, picks the writable characteristic (known printer services first: `18F0`, `FF00`, `FFE0`, ISSC, `E7810A71…`, then any writable one), writes in MTU-sized chunks with flow control, reconnects after a drop.
+- **Transport (`transport.ts`):** permissions, `findPrinters`, connect/disconnect, connection events, and `printBytes`, which paces sends so the printer's small buffer never overflows.
+- **`EscPosBuilder` (`escpos.ts`):** pure TypeScript, no dependencies. Alignment, bold, sizes, tear lines, raster images, code page 850 with Spanish accents, ASCII fallback.
+- **`usePrinterDisconnected`:** hook for a "printer disconnected" notice.
+- **Config plugin:** adds the iOS Bluetooth permission text to Info.plist.
 
-Por ahora es local. Desde el proyecto Expo:
+## Requirements
+
+- An Expo **development build** (Expo Go can't load native code).
+- Android permissions ship in the library manifest. The module never scans on Android, so it doesn't need the location permission.
+- iOS needs `NSBluetoothAlwaysUsageDescription`; the config plugin adds it.
+- Bluetooth printing has to be tested on a real phone. Simulators and emulators have no Bluetooth.
+
+## Setup
+
+Local for now. From the Expo app:
 
 ```sh
 npm install ../expo-thermal-printer
-npx expo prebuild   # o un build con EAS, para que se enlace el módulo nativo
 ```
+
+In `app.json`:
+
+```json
+{
+  "expo": {
+    "plugins": [
+      ["expo-thermal-printer", { "bluetoothPermission": "Allow $(PRODUCT_NAME) to connect to your receipt printer." }]
+    ]
+  }
+}
+```
+
+Then rebuild the native app (`npx expo run:android --device`, `npx expo run:ios --device`, or an EAS build).
+
+## Usage
 
 ```ts
 import {
-  EscPosBuilder,
   CODEPAGE,
-  listPairedPrinters,
+  EscPosBuilder,
   connectToPrinter,
+  findPrinters,
   printBytes,
 } from 'expo-thermal-printer';
 
-const [printer] = await listPairedPrinters();
-await connectToPrinter(printer.address);
+// Android: paired printers. iOS: a 4 second BLE scan, returning every named device nearby.
+const printers = await findPrinters({ scanTimeoutMs: 4000 });
+// Let the user pick; remember `address` for next time.
+await connectToPrinter(printers[0].address);
 
-const ticket = new EscPosBuilder()
+const receipt = new EscPosBuilder()
   .init()
   .codepage(CODEPAGE.CP850)
   .align('center')
   .bold(true)
-  .line('Mi negocio')
+  .line('My Shop')
   .bold(false)
-  .line('Gracias por su compra')
-  .feed(3)
+  .line('Thank you!')
+  .feedToTear() // feeds 18 lines so the last line clears the tear bar
   .build();
 
-await printBytes(ticket);
+await printBytes(receipt);
 ```
 
-Los errores de `transport.ts` llegan como `{ code, message }` (`bluetooth_off`, `permission_denied`, `not_connected`, `write_failed`, `unsupported`) con mensajes en español listos para mostrar.
+Errors come as `{ code, message }` with `code` one of `bluetooth_off`, `permission_denied`, `not_connected`, `write_failed`, `unsupported`. Messages are in English; map the codes to your own UI text.
 
-## Desarrollo
+## Development
 
 ```sh
 npm install
-npm test          # pruebas de ESC/POS y base64, en Node, sin hardware
+npm test          # ESC/POS and base64 tests, in Node, no hardware
 npm run typecheck
 ```
+
+## Status
+
+- Android: tested on real phones with an MP58C6 58mm printer.
+- iOS: tested on an iPhone 11 with the same MP58C6, which is dual mode and shows up in the BLE scan.

@@ -18,6 +18,11 @@ test('line appends a line feed after the text', () => {
   assert.deepEqual(bytes, [0x48, 0x69, 0x0a]);
 });
 
+test('feedToTear feeds enough lines to clear the tear bar', () => {
+  const bytes = Array.from(new EscPosBuilder().feedToTear().build());
+  assert.deepEqual(bytes, [0x1b, 0x64, 18]);
+});
+
 test('CP850 encodes Spanish accents, ASCII fallback strips them', () => {
   const cp = encodeCodepage850('Línea Núñez');
   assert.ok(cp.includes(0xa4), 'ñ should map to 0xa4 in CP850');

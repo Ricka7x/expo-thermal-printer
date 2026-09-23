@@ -3,12 +3,14 @@
   "version": "0.1.0",
   "private": true,
   "license": "UNLICENSED",
-  "description": "Bluetooth Classic ESC/POS thermal printing for Expo apps on Android, with a dependency-free ESC/POS byte builder.",
+  "description": "Bluetooth ESC/POS thermal printing for Expo apps on Android (Bluetooth Classic) and iOS (BLE), with a dependency-free ESC/POS byte builder.",
   "main": "src/index.ts",
   "types": "src/index.ts",
   "files": [
     "src",
     "android",
+    "ios",
+    "app.plugin.js",
     "expo-module.config.json",
     "!src/**/*.test.ts",
     "!android/build"

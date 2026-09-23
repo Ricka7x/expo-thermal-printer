@@ -62,13 +62,13 @@ private const val HEARTBEAT_INTERVAL_MS = 4000L
 private val HEARTBEAT_PROBE = byteArrayOf(0x10, 0x04, 0x01)
 
 class BluetoothUnavailableException :
-  CodedException("Bluetooth no está disponible o está apagado en este teléfono")
+  CodedException("Bluetooth is unavailable or turned off on this device")
 
 class BluetoothPermissionException :
-  CodedException("Falta el permiso de Bluetooth. Acéptalo para poder conectar la impresora")
+  CodedException("Bluetooth permission was denied. Allow it to connect to the printer")
 
 class PrinterNotConnectedException :
-  CodedException("No hay impresora conectada")
+  CodedException("No printer is connected")
 
 class PrinterConnectionException(address: String, cause: Throwable?) :
   CodedException(buildConnectionMessage(address, cause), cause)
@@ -81,15 +81,15 @@ private fun buildConnectionMessage(address: String, cause: Throwable?): String {
   val detail = cause?.message?.takeIf { it.isNotBlank() }
   val type = cause?.javaClass?.simpleName
   return when {
-    detail != null && type != null -> "No se pudo conectar con la impresora $address ($type: $detail)"
-    detail != null -> "No se pudo conectar con la impresora $address ($detail)"
-    type != null -> "No se pudo conectar con la impresora $address ($type)"
-    else -> "No se pudo conectar con la impresora $address"
+    detail != null && type != null -> "Could not connect to printer $address ($type: $detail)"
+    detail != null -> "Could not connect to printer $address ($detail)"
+    type != null -> "Could not connect to printer $address ($type)"
+    else -> "Could not connect to printer $address"
   }
 }
 
 class PrinterWriteException(cause: Throwable?) :
-  CodedException("No se pudieron enviar los datos a la impresora", cause)
+  CodedException("Could not send data to the printer", cause)
 
 class ThermalPrinterModule : Module() {
 
@@ -354,7 +354,7 @@ class ThermalPrinterModule : Module() {
       val adapter = requireAdapter()
       adapter.bondedDevices.orEmpty().map { device ->
         mapOf(
-          "name" to (device.name ?: "Sin nombre"),
+          "name" to (device.name ?: "Unnamed"),
           "address" to device.address,
           "bonded" to true
         )

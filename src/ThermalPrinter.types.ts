@@ -1,8 +1,12 @@
-export type PairedPrinter = {
-  /** Device name as shown in Android's Bluetooth settings. */
+export type PrinterDevice = {
+  /** Device name as the phone reports it. */
   name: string;
-  /** MAC address, the value passed back to `connect`. */
+  /**
+   * The value passed back to `connect`: the MAC address on Android, the
+   * CoreBluetooth peripheral identifier (a UUID, stable per phone) on iOS.
+   */
   address: string;
+  /** True for Android's bonded (paired) devices; always false on iOS, where BLE printers are found by scanning. */
   bonded: boolean;
 };
 

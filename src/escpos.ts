@@ -23,6 +23,15 @@ export const PAPER_58MM_WIDTH_DOTS = 384;
 
 export type Align = 'left' | 'center' | 'right';
 
+/**
+ * Lines to feed at the end of a job so the last printed line clears the tear
+ * bar. The print head sits roughly 20 to 30mm above the bar, so a short feed
+ * leaves the final lines printed but stuck inside the printer. Tuned on an
+ * MP58C6: 4 to 12 lines left the last lines inside, 15 barely cleared the bar,
+ * 18 leaves a comfortable margin.
+ */
+export const TEAR_OFF_FEED_LINES = 18;
+
 const ALIGN_CODE: Record<Align, number> = { left: 0, center: 1, right: 2 };
 
 /**
@@ -81,6 +90,11 @@ export class EscPosBuilder {
   /** ESC d n : feed n blank lines. */
   feed(lines = 1): this {
     return this.raw(ESC, 0x64, lines);
+  }
+
+  /** End a job with this: feeds far enough that every printed line can be torn off and read. */
+  feedToTear(lines = TEAR_OFF_FEED_LINES): this {
+    return this.feed(lines);
   }
 
   /** Encodes and appends text, converting line breaks to ESC/POS line feeds. */

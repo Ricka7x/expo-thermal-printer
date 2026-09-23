@@ -1,5 +1,5 @@
 export { getThermalPrinterModule } from './ThermalPrinterModule';
-export type { PairedPrinter, ConnectionChangedEvent } from './ThermalPrinter.types';
+export type { PrinterDevice, ConnectionChangedEvent } from './ThermalPrinter.types';
 
 export {
   type TransportError,
@@ -8,7 +8,7 @@ export {
   isConnected,
   connectedAddress,
   ensureBluetoothPermission,
-  listPairedPrinters,
+  findPrinters,
   connectToPrinter,
   disconnectPrinter,
   onConnectionChanged,
@@ -22,6 +22,7 @@ export {
   LF,
   PAPER_58MM_COLUMNS,
   PAPER_58MM_WIDTH_DOTS,
+  TEAR_OFF_FEED_LINES,
   encodeCodepage850,
   encodeAscii,
   fitColumns,
