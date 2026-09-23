@@ -1,0 +1,34 @@
+{
+  "name": "expo-thermal-printer",
+  "version": "0.1.0",
+  "private": true,
+  "license": "UNLICENSED",
+  "description": "Bluetooth Classic ESC/POS thermal printing for Expo apps on Android, with a dependency-free ESC/POS byte builder.",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "files": [
+    "src",
+    "android",
+    "expo-module.config.json",
+    "!src/**/*.test.ts",
+    "!android/build"
+  ],
+  "scripts": {
+    "test": "node --import tsx --test src/**/*.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "expo": "*",
+    "react": "*",
+    "react-native": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.4",
+    "@types/react": "~19.2.2",
+    "expo": "~57.0.24",
+    "react": "^19.2.3",
+    "react-native": "^0.86.3",
+    "tsx": "^4.23.15",
+    "typescript": "~6.0.3"
+  }
+}

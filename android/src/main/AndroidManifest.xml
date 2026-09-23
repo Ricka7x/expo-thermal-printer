@@ -1,0 +1,17 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+  <!-- Legacy Bluetooth permissions, only meaningful up to Android 11. -->
+  <uses-permission
+    android:name="android.permission.BLUETOOTH"
+    android:maxSdkVersion="30" />
+  <uses-permission
+    android:name="android.permission.BLUETOOTH_ADMIN"
+    android:maxSdkVersion="30" />
+
+  <!-- Android 12+ replaced the pair above with the runtime BLUETOOTH_CONNECT
+       permission. This module only talks to already paired devices and never
+       scans, so BLUETOOTH_SCAN and the location permission it drags in are
+       deliberately not requested. -->
+  <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+
+</manifest>
