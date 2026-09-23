@@ -2,17 +2,28 @@ import CoreBluetooth
 import ExpoModulesCore
 
 /**
- * Services cheap ESC/POS printers commonly expose over BLE. They are tried
- * first when picking the characteristic to write to; any other writable
- * characteristic is the fallback, so an unlisted printer still works.
+ * Print characteristics of the services cheap ESC/POS printers expose over
+ * BLE, in order of preference. Many printers expose several of these at once
+ * (a common 58mm module has ISSC, 18F0 and E7810A71 side by side), so the
+ * choice is explicit rather than "the first writable one". 18F0/2AF1 comes
+ * first because it's the one most printers answer on reliably. Any other
+ * writable characteristic is the last resort, so an unlisted printer still
+ * works.
  */
-private let knownPrinterServices: [CBUUID] = [
-  CBUUID(string: "18F0"),
-  CBUUID(string: "FF00"),
-  CBUUID(string: "FFE0"),
-  CBUUID(string: "49535343-FE7D-4AE5-8FA9-9FAFD205E455"),
-  CBUUID(string: "E7810A71-73AE-499D-8C15-FAA9AEF0C3F2"),
+private let knownPrintCharacteristics: [(service: CBUUID, characteristic: CBUUID)] = [
+  (CBUUID(string: "18F0"), CBUUID(string: "2AF1")),
+  (CBUUID(string: "49535343-FE7D-4AE5-8FA9-9FAFD205E455"), CBUUID(string: "49535343-8841-43F4-A8D4-ECBE34729BB3")),
+  (CBUUID(string: "E7810A71-73AE-499D-8C15-FAA9AEF0C3F2"), CBUUID(string: "BEF8D6C9-9C21-4C9E-B632-BD58C1009F9F")),
+  (CBUUID(string: "FF00"), CBUUID(string: "FF02")),
+  (CBUUID(string: "FFE0"), CBUUID(string: "FFE1")),
 ]
+
+/**
+ * Largest single BLE write. iOS often negotiates room for 180 to 512 bytes,
+ * but cheap printers drop data when a single write is that large. 100 is what
+ * receipt printer libraries settled on in practice.
+ */
+private let maxWriteBytes = 100
 
 /** How long an explicit connect waits before giving up. */
 private let connectTimeout: TimeInterval = 10
@@ -172,10 +183,13 @@ final class BlePrinterManager: NSObject, CBCentralManagerDelegate, CBPeripheralD
         completion(PrinterWriteException())
         return
       }
-      // Without-response is faster and what most printers expect; with-response
-      // is the fallback for the ones that only advertise that.
-      self.writeType = characteristic.properties.contains(.writeWithoutResponse) ? .withoutResponse : .withResponse
-      let chunkSize = min(max(peripheral.maximumWriteValueLength(for: self.writeType), 20), 512)
+      // With response whenever the printer supports it: each packet is
+      // acknowledged before the next goes out, which is flow control the
+      // printer can't overrun. Without-response only for printers that offer
+      // nothing else; cheap printers silently drop without-response packets
+      // when their buffer fills.
+      self.writeType = characteristic.properties.contains(.write) ? .withResponse : .withoutResponse
+      let chunkSize = min(max(peripheral.maximumWriteValueLength(for: self.writeType), 20), maxWriteBytes)
       var chunks: [Data] = []
       var offset = 0
       while offset < data.count {
@@ -334,15 +348,19 @@ final class BlePrinterManager: NSObject, CBCentralManagerDelegate, CBPeripheralD
   }
 
   private func pickWriteCharacteristic(_ peripheral: CBPeripheral) -> CBCharacteristic? {
-    let services = (peripheral.services ?? []).sorted { a, b in
-      knownPrinterServices.contains(a.uuid) && !knownPrinterServices.contains(b.uuid)
+    let services = peripheral.services ?? []
+    let isWritable: (CBCharacteristic) -> Bool = {
+      $0.properties.contains(.write) || $0.properties.contains(.writeWithoutResponse)
+    }
+    for known in knownPrintCharacteristics {
+      guard let service = services.first(where: { $0.uuid == known.service }) else { continue }
+      if let characteristic = service.characteristics?.first(where: { $0.uuid == known.characteristic && isWritable($0) }) {
+        return characteristic
+      }
     }
     for service in services {
-      for characteristic in service.characteristics ?? [] {
-        let properties = characteristic.properties
-        if properties.contains(.writeWithoutResponse) || properties.contains(.write) {
-          return characteristic
-        }
+      if let characteristic = service.characteristics?.first(where: isWritable) {
+        return characteristic
       }
     }
     return nil

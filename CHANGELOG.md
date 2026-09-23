@@ -10,3 +10,7 @@ First release.
 - `EscPosBuilder` with alignment, bold, sizes, word wrapping, tear lines, raster images and `feedToTear()`.
 - Code page 850 encoding for Western European text, with readable ASCII fallbacks.
 - Print jobs run one at a time.
+- Images are sent in strips of at most 255 rows; `raster()` validates the data length.
+- `align()` throws when called mid-line.
+- iOS writes with response when the printer supports it, at most 100 bytes per write, to a characteristic chosen from a list of known printer ones.
+- Android connects give up after 8 seconds per attempt and 15 seconds overall.

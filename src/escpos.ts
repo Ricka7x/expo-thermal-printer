@@ -53,6 +53,17 @@ export type Codepage = (typeof CODEPAGE)[keyof typeof CODEPAGE];
 export class EscPosBuilder {
   private bytes: number[] = [];
 
+  /**
+   * Whether the next byte starts a new print line. Tracked so align() can
+   * refuse to run mid-line: ESC/POS only applies alignment at the start of a
+   * line, and strict printers ignore it anywhere else, so the change lands on
+   * the following line instead.
+   */
+  private atLineStart = true;
+
+  /** The alignment in effect, so helpers that change it can put it back. */
+  private currentAlign: Align = 'left';
+
   /** Appends raw bytes. Values are taken modulo 256. */
   raw(...values: number[]): this {
     for (const value of values) this.bytes.push(value & 0xff);
@@ -61,6 +72,8 @@ export class EscPosBuilder {
 
   /** ESC @ : reset the printer to its power-on defaults. Start every job. */
   init(): this {
+    this.atLineStart = true;
+    this.currentAlign = 'left';
     return this.raw(ESC, 0x40);
   }
 
@@ -69,8 +82,16 @@ export class EscPosBuilder {
     return this.raw(ESC, 0x74, page);
   }
 
-  /** ESC a n : alignment for subsequent lines. */
+  /**
+   * ESC a n : alignment for the lines that follow. Call it at the start of a
+   * line (before any text on it); mid-line it throws, because printers either
+   * ignore it there or apply it to the next line.
+   */
   align(align: Align): this {
+    if (!this.atLineStart) {
+      throw new Error('align() must be called at the start of a line: finish the current line with line() first');
+    }
+    this.currentAlign = align;
     return this.raw(ESC, 0x61, ALIGN_CODE[align]);
   }
 
@@ -97,6 +118,7 @@ export class EscPosBuilder {
       this.raw(ESC, 0x64, step);
       remaining -= step;
     }
+    if (lines > 0) this.atLineStart = true;
     return this;
   }
 
@@ -119,13 +141,16 @@ export class EscPosBuilder {
 
   /** Encodes and appends text, converting line breaks to ESC/POS line feeds. */
   text(value: string, encoding: TextEncoderFn = encodeCodepage850): this {
-    for (const byte of encoding(value)) this.bytes.push(byte & 0xff);
+    const bytes = encoding(value);
+    for (const byte of bytes) this.bytes.push(byte & 0xff);
+    if (bytes.length > 0) this.atLineStart = bytes[bytes.length - 1] === LF;
     return this;
   }
 
   /** Appends a text line followed by a line feed. */
   line(value = '', encoding?: TextEncoderFn): this {
     this.text(value, encoding);
+    this.atLineStart = true;
     return this.raw(LF);
   }
 
@@ -137,22 +162,42 @@ export class EscPosBuilder {
     return this.line(char.repeat(columns));
   }
 
-  /** Dashed rule ("- - -"), a lighter-looking tear line. */
+  /**
+   * Dashed rule ("- - -"), a lighter-looking tear line.
+   *
+   * On an even column count an alternating pattern can't be symmetric: 32
+   * columns would start with a dash and end with a space, so the rule sits
+   * half a character left of centre and centred text above or below it looks
+   * shifted right. So it prints one column short (starting and ending with a
+   * dash) and centred, which the printer does by the dot, leaving an equal
+   * half-character gap on each side. The previous alignment is restored.
+   */
   dashedRule(columns = PAPER_58MM_COLUMNS): this {
+    const width = columns % 2 === 0 ? columns - 1 : columns;
     let rule = '';
-    while (rule.length < columns) rule += '- ';
-    return this.line(rule.slice(0, columns));
+    while (rule.length < width) rule += '- ';
+    rule = rule.slice(0, width);
+    if (width === columns || this.currentAlign === 'center') return this.line(rule);
+    const previous = this.currentAlign;
+    return this.align('center').line(rule).align(previous);
   }
 
   /**
    * GS v 0 : raster bit image. `bitmap` is already 1-bit packed, row-major,
-   * MSB first, with each row padded to whole bytes.
+   * MSB first, with each row padded to whole bytes. Call it at the start of a
+   * line; the paper is at the start of a line again afterwards.
+   *
+   * The image goes out as strips of at most `maxRowsPerStrip` rows (255 by
+   * default), each with its own header. Some printers read only the low byte
+   * of the height, so a 288 row image would print as 32 rows followed by the
+   * remaining pixel data as garbage text. Lower it for printers with a very
+   * small buffer.
    *
    * Throws if `data` isn't exactly rows × bytes-per-row long: the printer
    * would otherwise keep reading the following text as image data (or stop
    * short and print the rest of the image as garbage), ruining the receipt.
    */
-  raster(bitmap: RasterImage): this {
+  raster(bitmap: RasterImage, { maxRowsPerStrip = 255 }: { maxRowsPerStrip?: number } = {}): this {
     if (bitmap.widthDots <= 0 || bitmap.heightDots <= 0) return this;
     const bytesPerRow = Math.ceil(bitmap.widthDots / 8);
     const expected = bytesPerRow * bitmap.heightDots;
@@ -161,13 +206,19 @@ export class EscPosBuilder {
         `Raster data is ${bitmap.data.length} bytes, expected ${expected} (${bytesPerRow} bytes x ${bitmap.heightDots} rows)`
       );
     }
-    if (bytesPerRow > 0xffff || bitmap.heightDots > 0xffff) {
-      throw new RangeError('Raster image is too large for GS v 0');
+    if (bytesPerRow > 0xffff) {
+      throw new RangeError('Raster image is too wide for GS v 0');
     }
-    this.raw(GS, 0x76, 0x30, 0x00, bytesPerRow & 0xff, bytesPerRow >> 8, bitmap.heightDots & 0xff, bitmap.heightDots >> 8);
-    // A loop, not push(...data): spreading a large image can overflow the
-    // call stack on Hermes.
-    for (let i = 0; i < bitmap.data.length; i++) this.bytes.push(bitmap.data[i] & 0xff);
+    const stripRows = clampInt(maxRowsPerStrip, 1, 255);
+    for (let top = 0; top < bitmap.heightDots; top += stripRows) {
+      const rows = Math.min(stripRows, bitmap.heightDots - top);
+      this.raw(GS, 0x76, 0x30, 0x00, bytesPerRow & 0xff, bytesPerRow >> 8, rows, 0);
+      // A loop, not push(...data): spreading a large image can overflow the
+      // call stack on Hermes.
+      const end = (top + rows) * bytesPerRow;
+      for (let i = top * bytesPerRow; i < end; i++) this.bytes.push(bitmap.data[i] & 0xff);
+    }
+    this.atLineStart = true;
     return this;
   }
 
@@ -276,6 +327,13 @@ const CHARACTERS: Record<string, [number | undefined, string]> = {
   '§': [0xf5, 'S'], '÷': [0xf6, '/'], '¸': [0xf7, ','], '°': [0xf8, 'o'], '¨': [0xf9, '"'],
   '·': [0xfa, '-'], '¹': [0xfb, '1'], '³': [0xfc, '3'], '²': [0xfd, '2'],
   '\u00a0': [0xff, ' '], // no-break space
+  // Other spaces. iOS's toLocaleString() puts U+202F before "AM"/"PM".
+  '\u2002': [0x20, ' '], '\u2003': [0x20, ' '], '\u2004': [0x20, ' '], '\u2005': [0x20, ' '],
+  '\u2006': [0x20, ' '], '\u2007': [0x20, ' '], '\u2008': [0x20, ' '], '\u2009': [0x20, ' '],
+  '\u200a': [0x20, ' '], '\u202f': [0x20, ' '], '\u205f': [0x20, ' '],
+  // Invisible characters: print nothing.
+  '\u200b': [undefined, ''], '\u200c': [undefined, ''], '\u200d': [undefined, ''], '\ufeff': [undefined, ''],
+  '\u2212': [0x2d, '-'], // minus sign
   // Punctuation phones and word processors insert, with no CP850 byte.
   '\u2013': [0x2d, '-'], '\u2014': [0x2d, '-'], '\u2018': [0x27, "'"], '\u2019': [0x27, "'"],
   '\u201c': [0x22, '"'], '\u201d': [0x22, '"'], '\u2026': [undefined, '...'], '\u2022': [undefined, '*'],

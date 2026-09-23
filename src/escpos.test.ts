@@ -90,7 +90,31 @@ test('raster handles a large image without overflowing the stack', () => {
   const heightDots = 3000;
   const data = new Array(48 * heightDots).fill(0xaa);
   const b = new EscPosBuilder().raster({ widthDots: 384, heightDots, data });
-  assert.equal(b.length, 8 + data.length);
+  const strips = Math.ceil(heightDots / 255);
+  assert.equal(b.length, strips * 8 + data.length);
+});
+
+test('raster splits tall images into strips of at most 255 rows', () => {
+  const data = Array.from({ length: 300 }, (_, row) => row & 0xff);
+  const bytes = Array.from(new EscPosBuilder().raster({ widthDots: 8, heightDots: 300, data }).build());
+  // First strip: 255 rows, low byte only, then those rows' data.
+  assert.deepEqual(bytes.slice(0, 8), [0x1d, 0x76, 0x30, 0x00, 1, 0, 255, 0]);
+  assert.deepEqual(bytes.slice(8, 8 + 255), data.slice(0, 255));
+  // Second strip: the remaining 45 rows.
+  assert.deepEqual(bytes.slice(263, 271), [0x1d, 0x76, 0x30, 0x00, 1, 0, 45, 0]);
+  assert.deepEqual(bytes.slice(271), data.slice(255));
+});
+
+test('raster strips can be made smaller for printers with a tiny buffer', () => {
+  const b = new EscPosBuilder().raster({ widthDots: 8, heightDots: 48, data: new Array(48).fill(0) }, { maxRowsPerStrip: 24 });
+  assert.equal(b.length, 2 * 8 + 48);
+});
+
+test('align refuses to run mid-line, where printers ignore it', () => {
+  assert.throws(() => new EscPosBuilder().text('Total').align('right'), /start of a line/);
+  // Fine at the start of a line: after init, line(), feed() or an image.
+  new EscPosBuilder().init().align('center').line('a').align('left').text('b\n').align('right');
+  new EscPosBuilder().text('a').feed(1).align('center');
 });
 
 test('CP850 covers Western European accents beyond Spanish', () => {
@@ -108,4 +132,27 @@ test('a decomposed accent (letter + combining mark) encodes as one character', (
 
 test('carriage returns are dropped and tabs become spaces', () => {
   assert.deepEqual(encodeCodepage850('a\r\nb\tc'), [0x61, 0x0a, 0x62, 0x20, 0x63]);
+});
+
+test('dashedRule is symmetric: on even widths it is one column short and centred', () => {
+  const bytes = Array.from(new EscPosBuilder().dashedRule().build());
+  const rule = '- '.repeat(16).slice(0, 31);
+  assert.deepEqual(bytes, [
+    0x1b, 0x61, 1, ...Array.from(rule, (c) => c.charCodeAt(0)), 0x0a, 0x1b, 0x61, 0,
+  ]);
+  assert.ok(rule.startsWith('-') && rule.endsWith('-'));
+});
+
+test('dashedRule restores the alignment that was in effect', () => {
+  const bytes = Array.from(new EscPosBuilder().align('right').dashedRule().build());
+  assert.deepEqual(bytes.slice(-3), [0x1b, 0x61, 2]);
+});
+
+test('dashedRule on an odd width fills it without changing alignment', () => {
+  const bytes = Array.from(new EscPosBuilder().dashedRule(5).build());
+  assert.deepEqual(String.fromCharCode(...bytes), '- - -\n');
+});
+
+test('unusual spaces print as spaces and invisible characters as nothing', () => {
+  assert.equal(String.fromCharCode(...encodeCodepage850('3:45\u202fPM a\u200bb')), '3:45 PM ab');
 });

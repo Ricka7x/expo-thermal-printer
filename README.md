@@ -18,8 +18,8 @@ Receipt layouts are up to each app; this package handles the connection and the 
 ## What's included
 
 - **Native modules:** Kotlin (Android) and Swift/CoreBluetooth (iOS). Both only move bytes; they never format anything.
-  - Android: connects over SPP with fallbacks (secure → insecure → RFCOMM channel 1), writes in small flushed chunks, detects power-off, reconnects when the printer comes back.
-  - iOS: scans, connects, picks the writable characteristic (known printer services first: `18F0`, `FF00`, `FFE0`, ISSC, `E7810A71…`, then any writable one), writes in MTU-sized chunks with flow control, reconnects after a drop.
+  - Android: connects over SPP with fallbacks (secure → insecure → RFCOMM channel 1) and a time limit, so a paired printer that's switched off fails in seconds instead of hanging. Writes in small flushed chunks, detects power-off, reconnects when the printer comes back.
+  - iOS: scans, connects, and picks the print characteristic from a list of known ones (`18F0/2AF1` first, then ISSC, `E7810A71…`, `FF00`, `FFE0`, then any writable one). Writes are acknowledged (write with response) whenever the printer supports it, at most 100 bytes each, so the printer's buffer can't be overrun. Reconnects after a drop.
 - **Transport (`transport.ts`):** permissions, `findPrinters`, connect/disconnect, connection events, and `printBytes`, which paces sends so the printer's small buffer never overflows.
 - **`EscPosBuilder` (`escpos.ts`):** pure TypeScript, no dependencies. Alignment, bold, sizes, word wrapping, tear lines, raster images, code page 850 with Spanish accents, ASCII fallback. Also `wrap`, `twoColumns` and `fitColumns` for laying out rows.
 - **`usePrinterDisconnected`:** hook for a "printer disconnected" notice.
@@ -107,7 +107,12 @@ Errors come as `{ code, message }` with `code` one of `bluetooth_off`, `permissi
 
 **Building bytes**
 
-`EscPosBuilder` methods, all chainable: `init()`, `codepage(page)`, `align('left' | 'center' | 'right')`, `bold(on)`, `size(w, h)` (1–8), `text(s)`, `line(s)`, `wrapped(s, { columns, indent })`, `feed(n)`, `feedToTear()`, `tearLine()`, `dashedRule()`, `raster(image)`, `raw(...bytes)`, then `build()` for the `Uint8Array`.
+`EscPosBuilder` methods, all chainable: `init()`, `codepage(page)`, `align('left' | 'center' | 'right')`, `bold(on)`, `size(w, h)` (1–8), `text(s)`, `line(s)`, `wrapped(s, { columns, indent })`, `feed(n)`, `feedToTear()`, `tearLine()`, `dashedRule()`, `raster(image, { maxRowsPerStrip })`, `raw(...bytes)`, then `build()` for the `Uint8Array`.
+
+Two rules the builder enforces, because printers get them wrong silently:
+
+- **`align()` only at the start of a line.** Printers apply alignment at the start of a line only; mid-line they ignore it or carry it into the next line. The builder throws if you call it after text on the same line.
+- **Images go out in strips of at most 255 rows.** Some printers read only the low byte of an image's height, and print the rest of a taller image as garbage text. Pass a smaller `maxRowsPerStrip` for printers with a very small buffer. `raster()` also throws if the bitmap's data length doesn't match its size.
 
 Helpers: `wrap`, `twoColumns`, `fitColumns`, `encodeCodepage850`, `encodeAscii`, `bytesToBase64`, and the constants `CODEPAGE`, `PAPER_58MM_COLUMNS` (32), `PAPER_58MM_WIDTH_DOTS` (384), `TEAR_OFF_FEED_LINES` (18).
 
@@ -155,6 +160,8 @@ Keep templates pure (data in, bytes out) so they can be unit tested in Node with
 | Accents print as other symbols | The printer's default code page differs; call `codepage(CODEPAGE.CP850)` after `init()`, or switch to `encodeAscii`. |
 | The last lines stay inside the printer | End the job with `feedToTear()`. |
 | The end of a long receipt is missing | Send it with `printBytes`, which paces the data; don't write to the native module directly. |
+| Garbage text under an image, or white lines through it | The printer's buffer is small: lower `maxRowsPerStrip` (for example 24). |
+| Text is aligned one line late | Some code wrote text before `align()` on the same line; the builder now throws for this. |
 | App crashes on iOS the first time Bluetooth is used | `NSBluetoothAlwaysUsageDescription` is missing: add the config plugin and rebuild. |
 
 ## Development

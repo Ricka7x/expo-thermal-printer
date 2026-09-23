@@ -14,12 +14,14 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.util.Base64
 import androidx.core.content.ContextCompat
+import androidx.core.content.IntentCompat
 import expo.modules.kotlin.exception.CodedException
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
 import java.io.IOException
 import java.io.OutputStream
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
@@ -55,6 +57,21 @@ private const val CHUNK_PAUSE_MS = 12L
  * turned it back on" feels immediate without hammering the radio.
  */
 private const val HEARTBEAT_INTERVAL_MS = 4000L
+
+/**
+ * Longest a single socket connect may block. BluetoothSocket.connect() has no
+ * timeout of its own, and against a paired printer that is switched off it
+ * can hang far longer than anyone waits at a counter. Closing the socket from
+ * another thread is the only way to abort it.
+ */
+private const val CONNECT_ATTEMPT_TIMEOUT_MS = 8000L
+
+/**
+ * Budget for the whole fallback sequence: once spent, the remaining
+ * transports aren't tried. A printer that is off fails every one of them the
+ * same slow way, so trying all three only triples the wait.
+ */
+private const val CONNECT_TOTAL_TIMEOUT_MS = 15000L
 
 /** ESC/POS real-time status request (DLE EOT 1): no paper feed, no cut, no
  * print -- printers that don't support it simply ignore it. Only the success
@@ -140,7 +157,7 @@ class ThermalPrinterModule : Module() {
     val context = appContext.reactContext ?: return
     val receiver = object : BroadcastReceiver() {
       override fun onReceive(receivedContext: Context, intent: Intent) {
-        val device = intent.getParcelableExtra<BluetoothDevice>(BluetoothDevice.EXTRA_DEVICE) ?: return
+        val device = IntentCompat.getParcelableExtra(intent, BluetoothDevice.EXTRA_DEVICE, BluetoothDevice::class.java) ?: return
         when (intent.action) {
           BluetoothDevice.ACTION_ACL_DISCONNECTED -> {
             if (device.address != connectedAddress) return
@@ -297,9 +314,29 @@ class ThermalPrinterModule : Module() {
     }
 
     var lastError: Throwable? = null
+    val deadline = System.currentTimeMillis() + CONNECT_TOTAL_TIMEOUT_MS
     for (candidate in candidates) {
+      if (System.currentTimeMillis() >= deadline) {
+        runCatching { candidate.close() }
+        continue
+      }
+      // Aborts connect() below if it blocks past its budget: close() makes a
+      // blocked connect() throw IOException, which is handled like any failure.
+      // `settled` decides the race between the two: whichever side flips it
+      // first wins, so a connect that succeeds just as the budget runs out is
+      // never closed behind our back.
+      val settled = AtomicBoolean(false)
+      val watchdog = Thread {
+        try {
+          Thread.sleep(CONNECT_ATTEMPT_TIMEOUT_MS)
+          if (settled.compareAndSet(false, true)) runCatching { candidate.close() }
+        } catch (_: InterruptedException) {
+        }
+      }.apply { isDaemon = true; start() }
       try {
         candidate.connect()
+        if (!settled.compareAndSet(false, true)) throw IOException("Connect timed out")
+        watchdog.interrupt()
         socket = candidate
         outputStream = candidate.outputStream
         connectedAddress = address
@@ -308,6 +345,8 @@ class ThermalPrinterModule : Module() {
         startHeartbeat()
         return null
       } catch (error: Throwable) {
+        settled.set(true)
+        watchdog.interrupt()
         lastError = error
         runCatching { candidate.close() }
         // A short pause lets the printer settle before the next attempt: these
