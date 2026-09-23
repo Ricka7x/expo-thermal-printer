@@ -230,6 +230,13 @@ npm run preview   # the example templates as ASCII
 
 `npm run build` compiles `src/` to `build/`, which is what apps import. It also runs on `npm install` and `npm pack` through `prepare`.
 
+## Releasing
+
+1. Add a `## <version>` section to [CHANGELOG.md](CHANGELOG.md) and commit it.
+2. Run `./release.sh <version>`, for example `./release.sh 0.1.2`.
+
+The script bumps the version, runs `npm run check`, commits, tags and pushes. The tag triggers the Release workflow, which checks again, publishes to npm with provenance through trusted publishing (no npm token), and creates the GitHub Release. If the workflow fails, fix it and run `./release.sh <version> --retry`.
+
 ## Status
 
 - Android: tested on real phones with an MP58C6 58mm printer.
