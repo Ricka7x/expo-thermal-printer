@@ -1,6 +1,6 @@
 {
   "name": "@ricka7x/expo-thermal-printer",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "license": "MIT",
   "author": "Ricardo Ramirez",
   "description": "Bluetooth ESC/POS thermal printing for Expo apps on Android (Bluetooth Classic) and iOS (BLE), with a dependency-free ESC/POS byte builder.",
@@ -34,7 +34,8 @@
     "test": "node --import tsx --test 'src/**/*.test.ts' 'examples/**/*.test.ts'",
     "typecheck": "tsc --noEmit",
     "check": "npm run typecheck && npm test && npm run build",
-    "preview": "tsx examples/preview.ts"
+    "preview": "tsx examples/preview.ts",
+    "prepublishOnly": "npm run check"
   },
   "peerDependencies": {
     "expo": ">=57.0.0",
@@ -56,5 +57,24 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Ricka7x/expo-thermal-printer.git"
-  }
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "homepage": "https://github.com/Ricka7x/expo-thermal-printer#readme",
+  "bugs": {
+    "url": "https://github.com/Ricka7x/expo-thermal-printer/issues"
+  },
+  "keywords": [
+    "expo",
+    "react-native",
+    "thermal-printer",
+    "receipt-printer",
+    "escpos",
+    "esc-pos",
+    "bluetooth",
+    "ble",
+    "printer",
+    "receipt"
+  ]
 }

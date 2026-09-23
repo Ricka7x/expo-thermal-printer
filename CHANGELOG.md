@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.1
+
+- Published to npm as `@ricka7x/expo-thermal-printer`.
+- CI runs the typecheck, tests and build on every push and pull request.
+- Test globs are quoted so they expand the same on every shell.
+
 ## 0.1.0
 
 First release.

@@ -36,13 +36,15 @@ Receipt layouts are up to each app; this package handles the connection and the 
 
 ## Setup
 
-Install it from GitHub, pinned to a release tag:
-
 ```sh
-npm install github:Ricka7x/expo-thermal-printer#v0.1.0
+npx expo install @ricka7x/expo-thermal-printer
 ```
 
-npm builds the package on install (the `prepare` script), so the first install takes a little longer.
+Or straight from GitHub, pinned to a release tag (npm builds it on install, so it takes a little longer):
+
+```sh
+npm install github:Ricka7x/expo-thermal-printer#v0.1.1
+```
 
 In `app.json`:
 
