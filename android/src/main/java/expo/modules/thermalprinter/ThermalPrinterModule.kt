@@ -81,6 +81,14 @@ private const val CONNECT_TOTAL_TIMEOUT_MS = 15000L
  */
 private val RECONNECT_DELAYS_MS = longArrayOf(2000, 3000, 5000, 10000, 15000)
 
+/**
+ * After this long without getting the printer back, it was probably put away
+ * rather than restarted: retry only every RECONNECT_SLOW_DELAY_MS, so the
+ * radio is mostly idle but the printer still comes back on its own later.
+ */
+private const val RECONNECT_SLOW_AFTER_MS = 5 * 60 * 1000L
+private const val RECONNECT_SLOW_DELAY_MS = 60 * 1000L
+
 /** ESC/POS real-time status request (DLE EOT 1): no paper feed, no cut, no
  * print -- printers that don't support it simply ignore it. Only the success
  * or failure of the WRITE itself is used here, never the reply. */
@@ -153,6 +161,14 @@ class ThermalPrinterModule : Module() {
    * the radio three times per attempt.
    */
   @Volatile private var lastWorkingTransport = 0
+
+  /**
+   * True while the app is in the background. The reconnect loop doesn't run
+   * then: each attempt against a printer that stays off keeps the radio paging
+   * for seconds, nobody prints from a backgrounded app, and it resumes (with
+   * an immediate attempt) as soon as the app comes back.
+   */
+  @Volatile private var inBackground = false
 
   private val adapter: BluetoothAdapter?
     get() {
@@ -300,13 +316,20 @@ class ThermalPrinterModule : Module() {
    * The blocking socket connect runs outside the module's lock, so writes,
    * status reads and a disconnect() are never held up by an attempt.
    */
-  private fun startReconnectLoop() {
+  private fun startReconnectLoop(immediate: Boolean = false) {
     val generation = reconnectGeneration.incrementAndGet()
     val target = lastKnownAddress ?: return
+    // Picked up again by OnActivityEntersForeground.
+    if (inBackground) return
     Thread {
       var attempt = 0
+      val startedAt = System.currentTimeMillis()
       while (reconnectGeneration.get() == generation) {
-        val delay = RECONNECT_DELAYS_MS[minOf(attempt, RECONNECT_DELAYS_MS.size - 1)]
+        val delay = when {
+          immediate && attempt == 0 -> 0L
+          System.currentTimeMillis() - startedAt >= RECONNECT_SLOW_AFTER_MS -> RECONNECT_SLOW_DELAY_MS
+          else -> RECONNECT_DELAYS_MS[minOf(attempt, RECONNECT_DELAYS_MS.size - 1)]
+        }
         attempt++
         try {
           Thread.sleep(delay)
@@ -545,6 +568,18 @@ class ThermalPrinterModule : Module() {
         sendEvent("onConnectionChanged", mapOf("address" to address, "connected" to false))
       }
       true
+    }
+
+    OnActivityEntersBackground {
+      inBackground = true
+      // Stops the running loop; lastKnownAddress is kept, so the foreground
+      // handler knows there is a printer to get back.
+      reconnectGeneration.incrementAndGet()
+    }
+
+    OnActivityEntersForeground {
+      inBackground = false
+      if (lastKnownAddress != null && socket == null) startReconnectLoop(immediate = true)
     }
 
     OnDestroy {

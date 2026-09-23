@@ -11,7 +11,7 @@ Receipt layouts are up to each app; this package handles the connection and the 
 | Transport | Bluetooth Classic (SPP/RFCOMM) | Bluetooth Low Energy (GATT) |
 | Finding the printer | Paired once in Android's Bluetooth settings, listed instantly | BLE scan from the app |
 | `address` | MAC address | CoreBluetooth peripheral UUID (stable per phone) |
-| Auto-reconnect | Yes: drop seen via the ACL broadcast (4s heartbeat as backup), then retried every 2 to 15s | Yes (pending reconnect after a drop) |
+| Auto-reconnect | Yes: drop seen via the ACL broadcast (4s heartbeat as backup), then retried every 2 to 15s, once a minute after 5 minutes, paused while the app is in the background | Yes (pending reconnect after a drop, handled by the Bluetooth chip) |
 
 **iOS only works with printers that expose BLE.** iOS doesn't let apps use Bluetooth Classic SPP unless the accessory is MFi certified, and cheap printers aren't. Many 58mm printers are dual mode (Classic + BLE) and work on both platforms. A Classic-only printer works on Android but will never show up in an iOS scan. Check the printer's spec sheet for "BLE" or "Bluetooth 4.0 dual mode" before buying for iOS.
 
