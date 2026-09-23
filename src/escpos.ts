@@ -92,6 +92,18 @@ export class EscPosBuilder {
     return this.raw(ESC, 0x64, lines);
   }
 
+  /**
+   * Appends text wrapped to the paper width, one line per row. Use it for
+   * anything that might be longer than a line: the printer hard-wraps on its
+   * own, mid-word, and throws the layout off by a line.
+   */
+  wrapped(value: string, options: WrapOptions = {}, encoding?: TextEncoderFn): this {
+    for (const row of wrap(value, options)) {
+      this.line(row, encoding);
+    }
+    return this;
+  }
+
   /** End a job with this: feeds far enough that every printed line can be torn off and read. */
   feedToTear(lines = TEAR_OFF_FEED_LINES): this {
     return this.feed(lines);
@@ -273,6 +285,47 @@ const ASCII_FALLBACK: Record<string, string> = {
 function asciiFallback(char: string): number[] {
   const replacement = ASCII_FALLBACK[char] ?? '?';
   return [...replacement].map((c) => c.codePointAt(0)! & 0x7f);
+}
+
+export type WrapOptions = {
+  /** Characters per line. Defaults to 58mm paper's 32. */
+  columns?: number;
+  /** Prefix for the first line; later lines get the same width in spaces, so they align under it. */
+  indent?: string;
+};
+
+/**
+ * Splits text into lines that fit the paper, breaking at spaces. A word longer
+ * than a whole line is cut, since there is nowhere else for it to go. Line
+ * breaks in the input are kept.
+ */
+export function wrap(value: string, { columns = PAPER_58MM_COLUMNS, indent = '' }: WrapOptions = {}): string[] {
+  const room = Math.max(1, columns - indent.length);
+  const hanging = ' '.repeat(indent.length);
+  const rows: string[] = [];
+
+  for (const paragraph of value.split('\n')) {
+    let current = '';
+    for (const word of paragraph.split(/ +/).filter(Boolean)) {
+      let rest = word;
+      while (rest.length > 0) {
+        const candidate = current ? `${current} ${rest}` : rest;
+        if (candidate.length <= room) {
+          current = candidate;
+          rest = '';
+        } else if (current) {
+          rows.push(current);
+          current = '';
+        } else {
+          rows.push(rest.slice(0, room));
+          rest = rest.slice(room);
+        }
+      }
+    }
+    rows.push(current);
+  }
+
+  return rows.map((row, i) => (i === 0 ? indent : hanging) + row);
 }
 
 /** Pads or truncates a string to an exact column count, for aligned columns. */

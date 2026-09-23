@@ -27,6 +27,8 @@ export {
   encodeAscii,
   fitColumns,
   twoColumns,
+  wrap,
+  type WrapOptions,
   type Align,
   type Codepage,
   type RasterImage,

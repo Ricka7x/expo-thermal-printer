@@ -21,7 +21,7 @@ Receipt layouts are up to each app; this package handles the connection and the 
   - Android: connects over SPP with fallbacks (secure → insecure → RFCOMM channel 1), writes in small flushed chunks, detects power-off, reconnects when the printer comes back.
   - iOS: scans, connects, picks the writable characteristic (known printer services first: `18F0`, `FF00`, `FFE0`, ISSC, `E7810A71…`, then any writable one), writes in MTU-sized chunks with flow control, reconnects after a drop.
 - **Transport (`transport.ts`):** permissions, `findPrinters`, connect/disconnect, connection events, and `printBytes`, which paces sends so the printer's small buffer never overflows.
-- **`EscPosBuilder` (`escpos.ts`):** pure TypeScript, no dependencies. Alignment, bold, sizes, tear lines, raster images, code page 850 with Spanish accents, ASCII fallback.
+- **`EscPosBuilder` (`escpos.ts`):** pure TypeScript, no dependencies. Alignment, bold, sizes, word wrapping, tear lines, raster images, code page 850 with Spanish accents, ASCII fallback. Also `wrap`, `twoColumns` and `fitColumns` for laying out rows.
 - **`usePrinterDisconnected`:** hook for a "printer disconnected" notice.
 - **Config plugin:** adds the iOS Bluetooth permission text to Info.plist.
 
@@ -78,6 +78,7 @@ const receipt = new EscPosBuilder()
   .line('My Shop')
   .bold(false)
   .line('Thank you!')
+  .wrapped('Long text like a legal note wraps at word boundaries instead of mid-word.')
   .feedToTear() // feeds 18 lines so the last line clears the tear bar
   .build();
 
@@ -85,6 +86,30 @@ await printBytes(receipt);
 ```
 
 Errors come as `{ code, message }` with `code` one of `bluetooth_off`, `permission_denied`, `not_connected`, `write_failed`, `unsupported`. Messages are in English; map the codes to your own UI text.
+
+## Receipt templates
+
+The package doesn't ship receipt layouts. Each app writes its own template as a function that takes its data and returns bytes:
+
+```ts
+import { CODEPAGE, EscPosBuilder, twoColumns } from 'expo-thermal-printer';
+
+type Sale = { shop: string; items: { name: string; price: string }[]; total: string; note: string };
+
+export function buildReceipt(sale: Sale): Uint8Array {
+  const b = new EscPosBuilder().init().codepage(CODEPAGE.CP850);
+
+  b.align('center').bold(true).line(sale.shop).bold(false).dashedRule();
+  b.align('left');
+  for (const item of sale.items) b.line(twoColumns(item.name, item.price));
+  b.bold(true).line(twoColumns('Total', sale.total)).bold(false);
+  b.wrapped(sale.note);
+
+  return b.feedToTear().build();
+}
+```
+
+Keep templates pure (data in, bytes out) so they can be unit tested in Node without a printer.
 
 ## Development
 
