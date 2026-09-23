@@ -87,6 +87,32 @@ await printBytes(receipt);
 
 Errors come as `{ code, message }` with `code` one of `bluetooth_off`, `permission_denied`, `not_connected`, `write_failed`, `unsupported`. Messages are in English; map the codes to your own UI text.
 
+`printBytes` runs jobs one at a time, so two overlapping calls (a double tap) print one after the other instead of mixing their bytes.
+
+## API
+
+**Transport**
+
+| Function | What it does |
+|---|---|
+| `isPrintingSupported()` | `true` on Android and iOS. |
+| `ensureBluetoothPermission()` | Asks for Bluetooth permission if needed. Resolves `true` when granted. |
+| `findPrinters({ scanTimeoutMs? })` | Android: paired devices. iOS: BLE scan (default 4000 ms). |
+| `connectToPrinter(address)` | Connects; a no-op when already connected to it. iOS gives up after 10 s. |
+| `disconnectPrinter()` | Disconnects and stops auto-reconnecting. |
+| `printBytes(bytes)` | Sends a job, paced to the printer's speed. Resolves once everything is sent. |
+| `isConnected()`, `connectedAddress()`, `isBluetoothEnabled()` | Synchronous status reads. |
+| `onConnectionChanged(listener)` | Fires on connect, disconnect, and when the printer turns off or comes back. Returns `{ remove }`. |
+| `usePrinterDisconnected()` | React hook: `true` while printing is supported but no printer is connected. |
+
+**Building bytes**
+
+`EscPosBuilder` methods, all chainable: `init()`, `codepage(page)`, `align('left' | 'center' | 'right')`, `bold(on)`, `size(w, h)` (1–8), `text(s)`, `line(s)`, `wrapped(s, { columns, indent })`, `feed(n)`, `feedToTear()`, `tearLine()`, `dashedRule()`, `raster(image)`, `raw(...bytes)`, then `build()` for the `Uint8Array`.
+
+Helpers: `wrap`, `twoColumns`, `fitColumns`, `encodeCodepage850`, `encodeAscii`, `bytesToBase64`, and the constants `CODEPAGE`, `PAPER_58MM_COLUMNS` (32), `PAPER_58MM_WIDTH_DOTS` (384), `TEAR_OFF_FEED_LINES` (18).
+
+Text is encoded as code page 850 by default, which covers Western European accents (á é í ó ú ñ ü ç à ö ß, ¿ ¡ ° and more). Characters it lacks print as their nearest ASCII (`€` → `EUR`, `…` → `...`) rather than garbage. Pass `encodeAscii` as the encoding for printers whose code page is unknown.
+
 ## Receipt templates
 
 The package doesn't ship receipt layouts. Each app writes its own template as a function that takes its data and returns bytes:
@@ -111,13 +137,34 @@ export function buildReceipt(sale: Sale): Uint8Array {
 
 Keep templates pure (data in, bytes out) so they can be unit tested in Node without a printer.
 
+## Limitations
+
+- **One printer at a time.** Connecting to another printer drops the current one.
+- **58mm defaults.** Column helpers default to 32 columns; pass `columns` for 80mm paper (usually 48).
+- **Android never scans.** The printer has to be paired in Android's Bluetooth settings first.
+- **iOS needs BLE** (see above), and the app must be in the foreground to scan, connect and print. Background Bluetooth isn't configured.
+- **No printer status.** ESC/POS printers over Bluetooth don't reliably report paper-out or cover-open, so a job can be "sent" and not printed.
+- **No auto-cutter command.** End jobs with `feedToTear()` and tear the paper by hand.
+
+## Troubleshooting
+
+| Symptom | Likely cause |
+|---|---|
+| iOS scan doesn't list the printer | It's Bluetooth Classic only (no BLE), it's off, or another phone is connected to it. |
+| Android list is empty | The printer isn't paired in Android's Bluetooth settings. |
+| Accents print as other symbols | The printer's default code page differs; call `codepage(CODEPAGE.CP850)` after `init()`, or switch to `encodeAscii`. |
+| The last lines stay inside the printer | End the job with `feedToTear()`. |
+| The end of a long receipt is missing | Send it with `printBytes`, which paces the data; don't write to the native module directly. |
+| App crashes on iOS the first time Bluetooth is used | `NSBluetoothAlwaysUsageDescription` is missing: add the config plugin and rebuild. |
+
 ## Development
 
 ```sh
 npm install
-npm test          # ESC/POS and base64 tests, in Node, no hardware
-npm run typecheck
+npm run check     # typecheck, tests (Node, no hardware) and build
 ```
+
+`npm run build` compiles `src/` to `build/`, which is what apps import. It also runs on `npm install` and `npm pack` through `prepare`.
 
 ## Status
 

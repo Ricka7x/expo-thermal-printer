@@ -72,3 +72,40 @@ test('wrapped prints one line feed per wrapped row', () => {
   const bytes = Array.from(new EscPosBuilder().wrapped('aa bb', { columns: 2 }).build());
   assert.deepEqual(bytes, [0x61, 0x61, 0x0a, 0x62, 0x62, 0x0a]);
 });
+
+test('size is clamped to the 1 to 8 range the command allows', () => {
+  assert.deepEqual(Array.from(new EscPosBuilder().size(9, 0).build()), [0x1d, 0x21, 0x70]);
+});
+
+test('feed splits counts above 255 and ignores negatives', () => {
+  assert.deepEqual(Array.from(new EscPosBuilder().feed(300).build()), [0x1b, 0x64, 255, 0x1b, 0x64, 45]);
+  assert.equal(new EscPosBuilder().feed(-3).length, 0);
+});
+
+test('raster rejects data of the wrong length instead of corrupting the job', () => {
+  assert.throws(() => new EscPosBuilder().raster({ widthDots: 16, heightDots: 2, data: [0xff] }), RangeError);
+});
+
+test('raster handles a large image without overflowing the stack', () => {
+  const heightDots = 3000;
+  const data = new Array(48 * heightDots).fill(0xaa);
+  const b = new EscPosBuilder().raster({ widthDots: 384, heightDots, data });
+  assert.equal(b.length, 8 + data.length);
+});
+
+test('CP850 covers Western European accents beyond Spanish', () => {
+  assert.deepEqual(encodeCodepage850('çàöÇ'), [0x87, 0x85, 0x94, 0x80]);
+});
+
+test('characters without a CP850 byte fall back to readable ASCII', () => {
+  assert.deepEqual(String.fromCharCode(...encodeCodepage850('5€…')), '5EUR...');
+});
+
+test('a decomposed accent (letter + combining mark) encodes as one character', () => {
+  assert.deepEqual(encodeCodepage850('é'), [0x82]);
+  assert.deepEqual(encodeAscii('é'), [0x65]);
+});
+
+test('carriage returns are dropped and tabs become spaces', () => {
+  assert.deepEqual(encodeCodepage850('a\r\nb\tc'), [0x61, 0x0a, 0x62, 0x20, 0x63]);
+});

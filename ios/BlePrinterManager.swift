@@ -26,15 +26,19 @@ private let connectTimeout: TimeInterval = 10
  * either `queue.async` (work) or `queue.sync` (cheap reads).
  */
 final class BlePrinterManager: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
+  /** Called on `eventQueue`, never on `queue`: see notifyConnectionChanged. */
   var onConnectionChanged: ((String, Bool) -> Void)?
 
   private let queue = DispatchQueue(label: "expo.modules.thermalprinter.ble")
+  private let eventQueue = DispatchQueue(label: "expo.modules.thermalprinter.events")
   private var central: CBCentralManager?
   private var readyWaiters: [(Exception?) -> Void] = []
 
   private var discovered: [UUID: CBPeripheral] = [:]
   private var scanNames: [UUID: String] = [:]
   private var scanCompletions: [(Result<[[String: Any]], Exception>) -> Void] = []
+  /** Identifies the running scan so a stale timer can't end a newer one. */
+  private var scanGeneration = 0
 
   /** The printer being connected to, or connected. Retained: CoreBluetooth doesn't. */
   private var peripheral: CBPeripheral?
@@ -97,8 +101,11 @@ final class BlePrinterManager: NSObject, CBCentralManagerDelegate, CBPeripheralD
         // A scan already running answers every caller when it ends.
         guard self.scanCompletions.count == 1, let central = self.central else { return }
         self.scanNames = [:]
+        self.scanGeneration += 1
+        let generation = self.scanGeneration
         central.scanForPeripherals(withServices: nil, options: [CBCentralManagerScanOptionAllowDuplicatesKey: false])
         self.queue.asyncAfter(deadline: .now() + timeout) {
+          guard self.scanGeneration == generation, !self.scanCompletions.isEmpty else { return }
           self.finishScan()
         }
       }
@@ -121,18 +128,28 @@ final class BlePrinterManager: NSObject, CBCentralManagerDelegate, CBPeripheralD
           completion(nil)
           return
         }
-        self.dropCurrent(notify: true)
 
-        guard let target = self.discovered[id] ?? central.retrievePeripherals(withIdentifiers: [id]).first else {
-          completion(PrinterConnectionException("\(address) (not found, scan for it first)"))
-          return
+        let target: CBPeripheral
+        if let pending = self.peripheral, pending.identifier == id {
+          // Already connecting to it (an automatic reconnect after a drop).
+          // Cancelling and reconnecting would deliver didDisconnect for this
+          // same object and fail the new attempt, so join the pending connect.
+          target = pending
+          self.finishConnect(PrinterConnectionException("\(address) (superseded)"))
+        } else {
+          self.dropCurrent(notify: true)
+          guard let found = self.discovered[id] ?? central.retrievePeripherals(withIdentifiers: [id]).first else {
+            completion(PrinterConnectionException("\(address) (not found, scan for it first)"))
+            return
+          }
+          target = found
+          target.delegate = self
+          self.peripheral = target
+          central.connect(target)
         }
-        target.delegate = self
-        self.peripheral = target
         self.connectCompletion = completion
         self.connectAttempt += 1
         let attempt = self.connectAttempt
-        central.connect(target)
 
         // CoreBluetooth never times out a connect on its own.
         self.queue.asyncAfter(deadline: .now() + connectTimeout) {
@@ -190,6 +207,19 @@ final class BlePrinterManager: NSObject, CBCentralManagerDelegate, CBPeripheralD
   }
 
   // MARK: - Internals (queue only)
+
+  /**
+   * Events leave through their own serial queue (order kept) instead of being
+   * sent from `queue`. The status reads above block the JS thread on
+   * `queue.sync`, so emitting from `queue` could deadlock if the emitter ever
+   * waited on the JS thread.
+   */
+  private func notifyConnectionChanged(_ address: String, _ connected: Bool) {
+    let callback = onConnectionChanged
+    eventQueue.async {
+      callback?(address, connected)
+    }
+  }
 
   private func ensureCentral() {
     if central == nil {
@@ -277,7 +307,7 @@ final class BlePrinterManager: NSObject, CBCentralManagerDelegate, CBPeripheralD
     finishWrite(PrinterNotConnectedException())
     finishConnect(PrinterConnectionException("\(address ?? "") (cancelled)"))
     if notify, wasConnected, let address {
-      onConnectionChanged?(address, false)
+      notifyConnectionChanged(address, false)
     }
   }
 
@@ -389,7 +419,7 @@ final class BlePrinterManager: NSObject, CBCentralManagerDelegate, CBPeripheralD
     finishWrite(PrinterWriteException())
     finishConnect(PrinterConnectionException(peripheral.identifier.uuidString))
     if wasConnected {
-      onConnectionChanged?(peripheral.identifier.uuidString, false)
+      notifyConnectionChanged(peripheral.identifier.uuidString, false)
     }
     // An involuntary drop (printer off, out of range): a connect on iOS never
     // expires, so re-issuing it reconnects whenever the printer comes back.
@@ -429,7 +459,7 @@ final class BlePrinterManager: NSObject, CBCentralManagerDelegate, CBPeripheralD
     connected = true
     lastKnownId = peripheral.identifier
     finishConnect(nil)
-    onConnectionChanged?(peripheral.identifier.uuidString, true)
+    notifyConnectionChanged(peripheral.identifier.uuidString, true)
   }
 
   func peripheral(_ peripheral: CBPeripheral, didWriteValueFor characteristic: CBCharacteristic, error: Error?) {

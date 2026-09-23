@@ -53,8 +53,9 @@ export type Codepage = (typeof CODEPAGE)[keyof typeof CODEPAGE];
 export class EscPosBuilder {
   private bytes: number[] = [];
 
+  /** Appends raw bytes. Values are taken modulo 256. */
   raw(...values: number[]): this {
-    this.bytes.push(...values);
+    for (const value of values) this.bytes.push(value & 0xff);
     return this;
   }
 
@@ -79,17 +80,24 @@ export class EscPosBuilder {
   }
 
   /**
-   * GS ! n : character size multiplier. n packs width/height each minus one,
-   * so size 2 (double width and height) is 0x11.
+   * GS ! n : character size multiplier, 1 to 8 each (clamped). n packs
+   * width/height each minus one, so size 2 (double width and height) is 0x11.
    */
   size(widthMultiplier = 1, heightMultiplier = 1): this {
-    const n = (((widthMultiplier - 1) & 0x0f) << 4) | ((heightMultiplier - 1) & 0x0f);
-    return this.raw(GS, 0x21, n);
+    const w = clampInt(widthMultiplier, 1, 8) - 1;
+    const h = clampInt(heightMultiplier, 1, 8) - 1;
+    return this.raw(GS, 0x21, (w << 4) | h);
   }
 
-  /** ESC d n : feed n blank lines. */
+  /** ESC d n : feed n blank lines. The command takes at most 255, so larger feeds are split. */
   feed(lines = 1): this {
-    return this.raw(ESC, 0x64, lines);
+    let remaining = clampInt(lines, 0, Number.MAX_SAFE_INTEGER);
+    while (remaining > 0) {
+      const step = Math.min(remaining, 255);
+      this.raw(ESC, 0x64, step);
+      remaining -= step;
+    }
+    return this;
   }
 
   /**
@@ -111,13 +119,7 @@ export class EscPosBuilder {
 
   /** Encodes and appends text, converting line breaks to ESC/POS line feeds. */
   text(value: string, encoding: TextEncoderFn = encodeCodepage850): this {
-    for (const byte of encoding(value)) {
-      if (byte === LF) {
-        this.raw(LF);
-      } else {
-        this.raw(byte);
-      }
-    }
+    for (const byte of encoding(value)) this.bytes.push(byte & 0xff);
     return this;
   }
 
@@ -145,16 +147,27 @@ export class EscPosBuilder {
   /**
    * GS v 0 : raster bit image. `bitmap` is already 1-bit packed, row-major,
    * MSB first, with each row padded to whole bytes.
+   *
+   * Throws if `data` isn't exactly rows × bytes-per-row long: the printer
+   * would otherwise keep reading the following text as image data (or stop
+   * short and print the rest of the image as garbage), ruining the receipt.
    */
   raster(bitmap: RasterImage): this {
     if (bitmap.widthDots <= 0 || bitmap.heightDots <= 0) return this;
     const bytesPerRow = Math.ceil(bitmap.widthDots / 8);
-    const xL = bytesPerRow & 0xff;
-    const xH = (bytesPerRow >> 8) & 0xff;
-    const yL = bitmap.heightDots & 0xff;
-    const yH = (bitmap.heightDots >> 8) & 0xff;
-    this.raw(GS, 0x76, 0x30, 0x00, xL, xH, yL, yH);
-    this.bytes.push(...bitmap.data);
+    const expected = bytesPerRow * bitmap.heightDots;
+    if (bitmap.data.length !== expected) {
+      throw new RangeError(
+        `Raster data is ${bitmap.data.length} bytes, expected ${expected} (${bytesPerRow} bytes x ${bitmap.heightDots} rows)`
+      );
+    }
+    if (bytesPerRow > 0xffff || bitmap.heightDots > 0xffff) {
+      throw new RangeError('Raster image is too large for GS v 0');
+    }
+    this.raw(GS, 0x76, 0x30, 0x00, bytesPerRow & 0xff, bytesPerRow >> 8, bitmap.heightDots & 0xff, bitmap.heightDots >> 8);
+    // A loop, not push(...data): spreading a large image can overflow the
+    // call stack on Hermes.
+    for (let i = 0; i < bitmap.data.length; i++) this.bytes.push(bitmap.data[i] & 0xff);
     return this;
   }
 
@@ -167,6 +180,11 @@ export class EscPosBuilder {
   }
 }
 
+function clampInt(value: number, min: number, max: number): number {
+  if (!Number.isFinite(value)) return min;
+  return Math.min(max, Math.max(min, Math.round(value)));
+}
+
 export type TextEncoderFn = (value: string) => number[];
 
 export type RasterImage = {
@@ -177,25 +195,22 @@ export type RasterImage = {
 };
 
 /**
- * Encodes text for code page 850 (Latin-1 with Spanish accents). Characters
- * outside the table fall back to a close ASCII equivalent so a stray glyph can
- * never corrupt the rest of the ticket.
+ * Encodes text for code page 850 (Western European, with Spanish, French,
+ * Portuguese and German accents). Characters outside the table fall back to a
+ * close ASCII equivalent, so a stray glyph can never corrupt the rest of the
+ * receipt.
  */
 export function encodeCodepage850(value: string): number[] {
   const out: number[] = [];
-  for (const char of value) {
+  for (const char of normalizeText(value)) {
     const code = char.codePointAt(0)!;
-    if (char === '\n') {
-      out.push(LF);
-      continue;
-    }
     if (code < 0x80) {
       out.push(code);
       continue;
     }
-    const mapped = CP850_HIGH[char];
-    if (mapped !== undefined) {
-      out.push(mapped);
+    const entry = CHARACTERS[char];
+    if (entry && entry[0] !== undefined) {
+      out.push(entry[0]);
       continue;
     }
     out.push(...asciiFallback(char));
@@ -210,80 +225,66 @@ export function encodeCodepage850(value: string): number[] {
  */
 export function encodeAscii(value: string): number[] {
   const out: number[] = [];
-  for (const char of value) {
-    if (char === '\n') {
-      out.push(LF);
-      continue;
-    }
+  for (const char of normalizeText(value)) {
     const code = char.codePointAt(0)!;
-    if (code < 0x80) {
-      out.push(code);
-    } else {
-      out.push(...asciiFallback(char));
-    }
+    out.push(...(code < 0x80 ? [code] : asciiFallback(char)));
   }
   return out;
 }
 
-/** CP850 mappings for the accented characters Spanish tickets actually use. */
-const CP850_HIGH: Record<string, number> = {
-  'á': 0xa0,
-  'é': 0x82,
-  'í': 0xa1,
-  'ó': 0xa2,
-  'ú': 0xa3,
-  'Á': 0xb5,
-  'É': 0x90,
-  'Í': 0xd6,
-  'Ó': 0xe0,
-  'Ú': 0xe9,
-  'ñ': 0xa4,
-  'Ñ': 0xa5,
-  'ü': 0x81,
-  'Ü': 0x9a,
-  '¡': 0xad,
-  '¿': 0xa8,
-  'º': 0xa7,
-  'ª': 0xa6,
-  '°': 0xf8,
-  '·': 0xfa,
-  '\u2013': 0x2d,
-  '\u2014': 0x2d,
-  '\u201c': 0x22,
-  '\u201d': 0x22,
-  '\u2019': 0x27,
-};
+/**
+ * Composes accents typed as a letter plus a combining mark (so "e" + U+0301
+ * becomes "é" and maps to one byte), drops carriage returns, which some
+ * printers treat as "return to the start of the line", and turns tabs into a
+ * space.
+ */
+function normalizeText(value: string): string {
+  let text = value;
+  try {
+    text = text.normalize('NFC');
+  } catch {
+    // An engine without normalize support: leave the text as is.
+  }
+  return text.replace(/\r/g, '').replace(/\t/g, ' ');
+}
 
-const ASCII_FALLBACK: Record<string, string> = {
-  'á': 'a',
-  'é': 'e',
-  'í': 'i',
-  'ó': 'o',
-  'ú': 'u',
-  'Á': 'A',
-  'É': 'E',
-  'Í': 'I',
-  'Ó': 'O',
-  'Ú': 'U',
-  'ñ': 'n',
-  'Ñ': 'N',
-  'ü': 'u',
-  'Ü': 'U',
-  '¡': '!',
-  '¿': '?',
-  'º': 'o',
-  'ª': 'a',
-  '°': 'o',
-  '·': '-',
-  '\u2013': '-',
-  '\u2014': '-',
-  '\u201c': '"',
-  '\u201d': '"',
-  '\u2019': "'",
+/** Combining marks left over after NFC (no precomposed form): print nothing for them. */
+const COMBINING_MARK = /^[\u0300-\u036f]$/;
+
+/**
+ * Each non-ASCII character we know: its CP850 byte (undefined when CP850 has
+ * none) and its closest ASCII text.
+ */
+const CHARACTERS: Record<string, [number | undefined, string]> = {
+  'Ç': [0x80, 'C'], 'ü': [0x81, 'u'], 'é': [0x82, 'e'], 'â': [0x83, 'a'], 'ä': [0x84, 'a'],
+  'à': [0x85, 'a'], 'å': [0x86, 'a'], 'ç': [0x87, 'c'], 'ê': [0x88, 'e'], 'ë': [0x89, 'e'],
+  'è': [0x8a, 'e'], 'ï': [0x8b, 'i'], 'î': [0x8c, 'i'], 'ì': [0x8d, 'i'], 'Ä': [0x8e, 'A'],
+  'Å': [0x8f, 'A'], 'É': [0x90, 'E'], 'æ': [0x91, 'ae'], 'Æ': [0x92, 'AE'], 'ô': [0x93, 'o'],
+  'ö': [0x94, 'o'], 'ò': [0x95, 'o'], 'û': [0x96, 'u'], 'ù': [0x97, 'u'], 'ÿ': [0x98, 'y'],
+  'Ö': [0x99, 'O'], 'Ü': [0x9a, 'U'], 'ø': [0x9b, 'o'], '£': [0x9c, 'GBP'], 'Ø': [0x9d, 'O'],
+  '×': [0x9e, 'x'], 'ƒ': [0x9f, 'f'], 'á': [0xa0, 'a'], 'í': [0xa1, 'i'], 'ó': [0xa2, 'o'],
+  'ú': [0xa3, 'u'], 'ñ': [0xa4, 'n'], 'Ñ': [0xa5, 'N'], 'ª': [0xa6, 'a'], 'º': [0xa7, 'o'],
+  '¿': [0xa8, '?'], '®': [0xa9, '(R)'], '¬': [0xaa, '-'], '½': [0xab, '1/2'], '¼': [0xac, '1/4'],
+  '¡': [0xad, '!'], '«': [0xae, '<<'], '»': [0xaf, '>>'], 'Á': [0xb5, 'A'], 'Â': [0xb6, 'A'],
+  'À': [0xb7, 'A'], '©': [0xb8, '(C)'], '¢': [0xbd, 'c'], '¥': [0xbe, 'JPY'], 'ã': [0xc6, 'a'],
+  'Ã': [0xc7, 'A'], '¤': [0xcf, '?'], 'ð': [0xd0, 'd'], 'Ð': [0xd1, 'D'], 'Ê': [0xd2, 'E'],
+  'Ë': [0xd3, 'E'], 'È': [0xd4, 'E'], 'Í': [0xd6, 'I'], 'Î': [0xd7, 'I'], 'Ï': [0xd8, 'I'],
+  'Ì': [0xde, 'I'], 'Ó': [0xe0, 'O'], 'ß': [0xe1, 'ss'], 'Ô': [0xe2, 'O'], 'Ò': [0xe3, 'O'],
+  'õ': [0xe4, 'o'], 'Õ': [0xe5, 'O'], 'µ': [0xe6, 'u'], 'þ': [0xe7, 'th'], 'Þ': [0xe8, 'TH'],
+  'Ú': [0xe9, 'U'], 'Û': [0xea, 'U'], 'Ù': [0xeb, 'U'], 'ý': [0xec, 'y'], 'Ý': [0xed, 'Y'],
+  '¯': [0xee, '-'], '´': [0xef, "'"], '±': [0xf1, '+/-'], '¾': [0xf3, '3/4'], '¶': [0xf4, 'P'],
+  '§': [0xf5, 'S'], '÷': [0xf6, '/'], '¸': [0xf7, ','], '°': [0xf8, 'o'], '¨': [0xf9, '"'],
+  '·': [0xfa, '-'], '¹': [0xfb, '1'], '³': [0xfc, '3'], '²': [0xfd, '2'],
+  '\u00a0': [0xff, ' '], // no-break space
+  // Punctuation phones and word processors insert, with no CP850 byte.
+  '\u2013': [0x2d, '-'], '\u2014': [0x2d, '-'], '\u2018': [0x27, "'"], '\u2019': [0x27, "'"],
+  '\u201c': [0x22, '"'], '\u201d': [0x22, '"'], '\u2026': [undefined, '...'], '\u2022': [undefined, '*'],
+  '€': [undefined, 'EUR'],
 };
 
 function asciiFallback(char: string): number[] {
-  const replacement = ASCII_FALLBACK[char] ?? '?';
+  if (COMBINING_MARK.test(char)) return [];
+  const replacement = CHARACTERS[char]?.[1] ?? '?';
   return [...replacement].map((c) => c.codePointAt(0)! & 0x7f);
 }
 

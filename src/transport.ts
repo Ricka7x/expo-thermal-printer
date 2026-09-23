@@ -166,11 +166,27 @@ function pause(ms: number): Promise<void> {
 }
 
 /**
- * Sends a built ESC/POS payload over the already-connected printer. Keep
- * printing decoupled from whatever business action triggered it: a failed
- * print should never undo a sale that is already recorded.
+ * Jobs run one at a time. printBytes sends a job as many small writes with
+ * pauses between them, so two overlapping calls (a double tap on "print")
+ * would interleave their chunks and the printer would get both receipts mixed
+ * together.
  */
-export async function printBytes(bytes: Uint8Array): Promise<void> {
+let printQueue: Promise<void> = Promise.resolve();
+
+/**
+ * Sends a built ESC/POS payload over the already-connected printer, after any
+ * job already printing. Keep printing decoupled from whatever business action
+ * triggered it: a failed print should never undo a sale that is already
+ * recorded.
+ */
+export function printBytes(bytes: Uint8Array): Promise<void> {
+  const job = printQueue.then(() => sendJob(bytes));
+  // The next job waits for this one to settle, not to succeed.
+  printQueue = job.catch(() => {});
+  return job;
+}
+
+async function sendJob(bytes: Uint8Array): Promise<void> {
   if (!isPrintingSupported()) throw UNSUPPORTED;
   const module = getThermalPrinterModule();
   if (!module.isConnected()) {

@@ -16,18 +16,21 @@ import ExpoModulesCore
  * when a CBCentralManager is created).
  */
 public class ThermalPrinterModule: Module {
-  private lazy var printer: BlePrinterManager = {
-    let manager = BlePrinterManager()
-    manager.onConnectionChanged = { [weak self] address, connected in
-      self?.sendEvent("onConnectionChanged", ["address": address, "connected": connected])
-    }
-    return manager
-  }()
+  // Not lazy: sync functions run on the JS thread and async ones on another
+  // queue, and a lazy var initialized from both at once isn't thread safe.
+  // Creating the manager is cheap; the Bluetooth manager inside is lazy.
+  private let printer = BlePrinterManager()
 
   public func definition() -> ModuleDefinition {
     Name("ThermalPrinter")
 
     Events("onConnectionChanged")
+
+    OnCreate { [weak self] in
+      self?.printer.onConnectionChanged = { [weak self] address, connected in
+        self?.sendEvent("onConnectionChanged", ["address": address, "connected": connected])
+      }
+    }
 
     Function("isBluetoothEnabled") { () -> Bool in
       self.printer.isPoweredOn()
