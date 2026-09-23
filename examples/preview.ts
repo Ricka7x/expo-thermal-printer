@@ -4,7 +4,7 @@
  *   npm run preview
  *   npm run preview -- kitchen-order queue-ticket
  */
-import { previewReceipt } from 'expo-thermal-printer/escpos';
+import { previewReceipt } from '@ricka7x/expo-thermal-printer/escpos';
 
 import { samples } from './samples';
 

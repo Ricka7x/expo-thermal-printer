@@ -1,4 +1,4 @@
-import type { RasterImage } from 'expo-thermal-printer/escpos';
+import type { RasterImage } from '@ricka7x/expo-thermal-printer/escpos';
 
 /**
  * A ring, drawn in code so the examples need no image file. A real app would

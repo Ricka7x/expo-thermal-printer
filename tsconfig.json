@@ -15,7 +15,7 @@
       "react"
     ],
     "paths": {
-      "expo-thermal-printer/escpos": [
+      "@ricka7x/expo-thermal-printer/escpos": [
         "./src/pure.ts"
       ]
     }

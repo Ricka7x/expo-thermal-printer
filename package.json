@@ -1,8 +1,8 @@
 {
-  "name": "expo-thermal-printer",
+  "name": "@ricka7x/expo-thermal-printer",
   "version": "0.1.0",
-  "private": true,
-  "license": "UNLICENSED",
+  "license": "MIT",
+  "author": "Ricardo Ramirez",
   "description": "Bluetooth ESC/POS thermal printing for Expo apps on Android (Bluetooth Classic) and iOS (BLE), with a dependency-free ESC/POS byte builder.",
   "main": "build/index.js",
   "types": "build/index.d.ts",
@@ -52,5 +52,9 @@
   },
   "engines": {
     "node": ">=20"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Ricka7x/expo-thermal-printer.git"
   }
 }

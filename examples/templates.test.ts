@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { previewReceipt } from 'expo-thermal-printer/escpos';
+import { previewReceipt } from '@ricka7x/expo-thermal-printer/escpos';
 
 import { samples } from './samples';
 

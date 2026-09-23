@@ -1,4 +1,4 @@
-import { CODEPAGE, EscPosBuilder, fitColumns, twoColumns } from 'expo-thermal-printer/escpos';
+import { CODEPAGE, EscPosBuilder, fitColumns, twoColumns } from '@ricka7x/expo-thermal-printer/escpos';
 
 import { money } from '../format';
 

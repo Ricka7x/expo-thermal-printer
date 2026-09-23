@@ -1,4 +1,4 @@
-# expo-thermal-printer
+# @ricka7x/expo-thermal-printer
 
 Bluetooth ESC/POS thermal printing for Expo apps on **Android** and **iOS**, plus a dependency-free ESC/POS byte builder.
 
@@ -34,11 +34,13 @@ Receipt layouts are up to each app; this package handles the connection and the 
 
 ## Setup
 
-Local for now. From the Expo app:
+Install it from GitHub, pinned to a release tag:
 
 ```sh
-npm install ../expo-thermal-printer
+npm install github:Ricka7x/expo-thermal-printer#v0.1.0
 ```
+
+npm builds the package on install (the `prepare` script), so the first install takes a little longer.
 
 In `app.json`:
 
@@ -46,7 +48,7 @@ In `app.json`:
 {
   "expo": {
     "plugins": [
-      ["expo-thermal-printer", { "bluetoothPermission": "Allow $(PRODUCT_NAME) to connect to your receipt printer." }]
+      ["@ricka7x/expo-thermal-printer", { "bluetoothPermission": "Allow $(PRODUCT_NAME) to connect to your receipt printer." }]
     ]
   }
 }
@@ -63,7 +65,7 @@ import {
   connectToPrinter,
   findPrinters,
   printBytes,
-} from 'expo-thermal-printer';
+} from '@ricka7x/expo-thermal-printer';
 
 // Android: paired printers. iOS: a 4 second BLE scan, returning every named device nearby.
 const printers = await findPrinters({ scanTimeoutMs: 4000 });
@@ -105,7 +107,7 @@ Errors come as `{ code, message }` with `code` one of `bluetooth_off`, `permissi
 | `onConnectionChanged(listener)` | Fires on connect, disconnect, and when the printer turns off or comes back. Returns `{ remove }`. |
 | `usePrinterDisconnected()` | React hook: `true` while printing is supported but no printer is connected. |
 
-**Building bytes** (also available from `expo-thermal-printer/escpos`, which loads in plain Node)
+**Building bytes** (also available from `@ricka7x/expo-thermal-printer/escpos`, which loads in plain Node)
 
 `EscPosBuilder` methods, all chainable: `init()`, `codepage(page)`, `align('left' | 'center' | 'right')`, `bold(on)`, `size(w, h)` (1–8), `text(s)`, `line(s)`, `wrapped(s, { columns, indent })`, `feed(n)`, `feedToTear()`, `tearLine()`, `dashedRule()`, `raster(image, { maxRowsPerStrip })`, `raw(...bytes)`, then `build()` for the `Uint8Array`.
 
@@ -120,10 +122,10 @@ Text is encoded as code page 850 by default, which covers Western European accen
 
 ## Receipt templates
 
-The package doesn't ship receipt layouts. Each app writes its own template as a function that takes its data and returns bytes. Import from `expo-thermal-printer/escpos`: it has the builder and the preview but nothing native, so templates also load in Node (unit tests, scripts, a server).
+The package doesn't ship receipt layouts. Each app writes its own template as a function that takes its data and returns bytes. Import from `@ricka7x/expo-thermal-printer/escpos`: it has the builder and the preview but nothing native, so templates also load in Node (unit tests, scripts, a server).
 
 ```ts
-import { CODEPAGE, EscPosBuilder, twoColumns } from 'expo-thermal-printer/escpos';
+import { CODEPAGE, EscPosBuilder, twoColumns } from '@ricka7x/expo-thermal-printer/escpos';
 
 type Sale = { shop: string; items: { name: string; price: string }[]; total: string; note: string };
 
@@ -179,7 +181,7 @@ npm run preview -- kitchen-order         # just one
 ```ts
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { previewReceipt } from 'expo-thermal-printer/escpos';
+import { previewReceipt } from '@ricka7x/expo-thermal-printer/escpos';
 
 import { buildReceipt } from './receipt';
 
@@ -228,3 +230,7 @@ npm run preview   # the example templates as ASCII
 
 - Android: tested on real phones with an MP58C6 58mm printer.
 - iOS: tested on an iPhone with the same MP58C6, which is dual mode and shows up in the BLE scan.
+
+## License
+
+[MIT](LICENSE)

@@ -1,4 +1,4 @@
-import { CODEPAGE, EscPosBuilder } from 'expo-thermal-printer/escpos';
+import { CODEPAGE, EscPosBuilder } from '@ricka7x/expo-thermal-printer/escpos';
 
 import { dateTime } from '../format';
 

@@ -1,6 +1,6 @@
 /**
  * The parts of the package with no React Native or Expo imports: building
- * bytes and previewing them. Import from "expo-thermal-printer/escpos" in
+ * bytes and previewing them. Import from "@ricka7x/expo-thermal-printer/escpos" in
  * Node (unit tests, scripts, a server building receipts); the main entry
  * pulls in the native module and can't load outside an app.
  */

@@ -7,7 +7,7 @@ const DEFAULT_BLUETOOTH_PERMISSION = 'Allow $(PRODUCT_NAME) to use Bluetooth to 
  * NSBluetoothAlwaysUsageDescription. Android permissions ship in the library
  * manifest, so this plugin only touches Info.plist.
  *
- *   plugins: [["expo-thermal-printer", { "bluetoothPermission": "..." }]]
+ *   plugins: [["@ricka7x/expo-thermal-printer", { "bluetoothPermission": "..." }]]
  */
 module.exports = function withThermalPrinter(config, { bluetoothPermission } = {}) {
   return withInfoPlist(config, (config) => {
