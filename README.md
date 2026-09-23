@@ -105,7 +105,7 @@ Errors come as `{ code, message }` with `code` one of `bluetooth_off`, `permissi
 | `onConnectionChanged(listener)` | Fires on connect, disconnect, and when the printer turns off or comes back. Returns `{ remove }`. |
 | `usePrinterDisconnected()` | React hook: `true` while printing is supported but no printer is connected. |
 
-**Building bytes**
+**Building bytes** (also available from `expo-thermal-printer/escpos`, which loads in plain Node)
 
 `EscPosBuilder` methods, all chainable: `init()`, `codepage(page)`, `align('left' | 'center' | 'right')`, `bold(on)`, `size(w, h)` (1–8), `text(s)`, `line(s)`, `wrapped(s, { columns, indent })`, `feed(n)`, `feedToTear()`, `tearLine()`, `dashedRule()`, `raster(image, { maxRowsPerStrip })`, `raw(...bytes)`, then `build()` for the `Uint8Array`.
 
@@ -114,16 +114,16 @@ Two rules the builder enforces, because printers get them wrong silently:
 - **`align()` only at the start of a line.** Printers apply alignment at the start of a line only; mid-line they ignore it or carry it into the next line. The builder throws if you call it after text on the same line.
 - **Images go out in strips of at most 255 rows.** Some printers read only the low byte of an image's height, and print the rest of a taller image as garbage text. Pass a smaller `maxRowsPerStrip` for printers with a very small buffer. `raster()` also throws if the bitmap's data length doesn't match its size.
 
-Helpers: `wrap`, `twoColumns`, `fitColumns`, `encodeCodepage850`, `encodeAscii`, `bytesToBase64`, and the constants `CODEPAGE`, `PAPER_58MM_COLUMNS` (32), `PAPER_58MM_WIDTH_DOTS` (384), `TEAR_OFF_FEED_LINES` (18).
+Helpers: `wrap`, `twoColumns`, `fitColumns`, `encodeCodepage850`, `decodeCodepage850`, `encodeAscii`, `bytesToBase64`, `previewReceipt`, and the constants `CODEPAGE`, `PAPER_58MM_COLUMNS` (32), `PAPER_58MM_WIDTH_DOTS` (384), `TEAR_OFF_FEED_LINES` (18).
 
 Text is encoded as code page 850 by default, which covers Western European accents (á é í ó ú ñ ü ç à ö ß, ¿ ¡ ° and more). Characters it lacks print as their nearest ASCII (`€` → `EUR`, `…` → `...`) rather than garbage. Pass `encodeAscii` as the encoding for printers whose code page is unknown.
 
 ## Receipt templates
 
-The package doesn't ship receipt layouts. Each app writes its own template as a function that takes its data and returns bytes:
+The package doesn't ship receipt layouts. Each app writes its own template as a function that takes its data and returns bytes. Import from `expo-thermal-printer/escpos`: it has the builder and the preview but nothing native, so templates also load in Node (unit tests, scripts, a server).
 
 ```ts
-import { CODEPAGE, EscPosBuilder, twoColumns } from 'expo-thermal-printer';
+import { CODEPAGE, EscPosBuilder, twoColumns } from 'expo-thermal-printer/escpos';
 
 type Sale = { shop: string; items: { name: string; price: string }[]; total: string; note: string };
 
@@ -140,7 +140,57 @@ export function buildReceipt(sale: Sale): Uint8Array {
 }
 ```
 
-Keep templates pure (data in, bytes out) so they can be unit tested in Node without a printer.
+### Examples
+
+[`examples/templates/`](examples/templates) has complete templates, each showing different techniques:
+
+| Template | Shows |
+|---|---|
+| [`retail-receipt`](examples/templates/retail-receipt.ts) | Logo image, item rows with quantity and unit price, tax, double-size total, change |
+| [`kitchen-order`](examples/templates/kitchen-order.ts) | Mixing sizes, double-height items readable from a distance, indented modifiers |
+| [`queue-ticket`](examples/templates/queue-ticket.ts) | One huge centred number (4x size) |
+| [`shift-report`](examples/templates/shift-report.ts) | Label/value report, flagging a cash difference, signature line |
+| [`restaurant-bill-80mm`](examples/templates/restaurant-bill-80mm.ts) | 80mm paper (48 columns), a three-column table, suggested tips |
+
+See them all as ASCII (from a clone of this repo):
+
+```sh
+npm run preview                          # every example
+npm run preview -- kitchen-order         # just one
+```
+
+```
++--------------------------------+
+|        T A B L E   1 2         |
+|                                |
+|           Order #57            |
+|Luis            23/09/2026 14:05|
+|================================|
+|2x Tacos al pastor              |
+|                                |
+|   - No onion                   |
+|   - Extra salsa verde          |
+```
+
+### Previewing and testing your own templates
+
+`previewReceipt(bytes, { columns })` turns ESC/POS bytes into text: alignment, double width (`T O T A L`), double height (an extra blank row), feeds and images (as ASCII art). Use it to eyeball a layout in a script, or to test a template without a printer:
+
+```ts
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { previewReceipt } from 'expo-thermal-printer/escpos';
+
+import { buildReceipt } from './receipt';
+
+test('receipt fits 58mm paper and shows the total', () => {
+  const text = previewReceipt(buildReceipt(sample), { frame: false });
+  for (const row of text.split('\n')) assert.ok(row.length <= 32);
+  assert.match(text, /Total\s+\$196\.39/);
+});
+```
+
+The preview works on a character grid, so it can't show half-character offsets the printer produces (a centred 31-character rule sits half a character in from each side on paper), bold, or exact image proportions. Check the final look on a real printer.
 
 ## Limitations
 
@@ -169,6 +219,7 @@ Keep templates pure (data in, bytes out) so they can be unit tested in Node with
 ```sh
 npm install
 npm run check     # typecheck, tests (Node, no hardware) and build
+npm run preview   # the example templates as ASCII
 ```
 
 `npm run build` compiles `src/` to `build/`, which is what apps import. It also runs on `npm install` and `npm pack` through `prepare`.

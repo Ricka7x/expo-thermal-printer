@@ -10,6 +10,9 @@ First release.
 - `EscPosBuilder` with alignment, bold, sizes, word wrapping, tear lines, raster images and `feedToTear()`.
 - Code page 850 encoding for Western European text, with readable ASCII fallbacks.
 - Print jobs run one at a time.
+- `previewReceipt()` renders ESC/POS bytes as ASCII for terminals and tests.
+- `expo-thermal-printer/escpos` entry with the builder and preview only, loadable in plain Node.
+- Example templates (retail receipt, kitchen order, queue ticket, shift report, 80mm restaurant bill) with tests and `npm run preview`.
 - Images are sent in strips of at most 255 rows; `raster()` validates the data length.
 - `align()` throws when called mid-line.
 - iOS writes with response when the printer supports it, at most 100 bytes per write, to a characteristic chosen from a list of known printer ones.

@@ -340,6 +340,18 @@ const CHARACTERS: Record<string, [number | undefined, string]> = {
   '€': [undefined, 'EUR'],
 };
 
+/** CP850 byte (0x80 and up) back to its character, for previews. */
+const CP850_DECODE: Record<number, string> = {};
+for (const [char, [byte]] of Object.entries(CHARACTERS)) {
+  if (byte !== undefined && byte >= 0x80 && CP850_DECODE[byte] === undefined) CP850_DECODE[byte] = char;
+}
+
+/** Decodes a code page 850 byte to text. Bytes with no known character read as "?". */
+export function decodeCodepage850(byte: number): string {
+  if (byte < 0x80) return String.fromCharCode(byte);
+  return CP850_DECODE[byte] ?? '?';
+}
+
 function asciiFallback(char: string): number[] {
   if (COMBINING_MARK.test(char)) return [];
   const replacement = CHARACTERS[char]?.[1] ?? '?';

@@ -6,6 +6,18 @@
   "description": "Bluetooth ESC/POS thermal printing for Expo apps on Android (Bluetooth Classic) and iOS (BLE), with a dependency-free ESC/POS byte builder.",
   "main": "build/index.js",
   "types": "build/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./build/index.d.ts",
+      "default": "./build/index.js"
+    },
+    "./escpos": {
+      "types": "./build/pure.d.ts",
+      "default": "./build/pure.js"
+    },
+    "./app.plugin.js": "./app.plugin.js",
+    "./package.json": "./package.json"
+  },
   "files": [
     "build",
     "src",
@@ -19,9 +31,10 @@
   "scripts": {
     "build": "rm -rf build && tsc -p tsconfig.build.json",
     "prepare": "npm run build",
-    "test": "node --import tsx --test src/**/*.test.ts",
+    "test": "node --import tsx --test src/**/*.test.ts examples/**/*.test.ts",
     "typecheck": "tsc --noEmit",
-    "check": "npm run typecheck && npm test && npm run build"
+    "check": "npm run typecheck && npm test && npm run build",
+    "preview": "tsx examples/preview.ts"
   },
   "peerDependencies": {
     "expo": ">=57.0.0",

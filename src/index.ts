@@ -16,22 +16,4 @@ export {
 } from './transport';
 export { usePrinterDisconnected } from './use-printer-status';
 
-export {
-  EscPosBuilder,
-  CODEPAGE,
-  LF,
-  PAPER_58MM_COLUMNS,
-  PAPER_58MM_WIDTH_DOTS,
-  TEAR_OFF_FEED_LINES,
-  encodeCodepage850,
-  encodeAscii,
-  fitColumns,
-  twoColumns,
-  wrap,
-  type WrapOptions,
-  type Align,
-  type Codepage,
-  type RasterImage,
-  type TextEncoderFn,
-} from './escpos';
-export { bytesToBase64 } from './base64';
+export * from './pure';

@@ -1,14 +1,27 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "lib": ["ES2022"],
+    "lib": [
+      "ES2022"
+    ],
     "module": "ESNext",
     "moduleResolution": "bundler",
     "jsx": "react-jsx",
     "strict": true,
     "noEmit": true,
     "skipLibCheck": true,
-    "types": ["node", "react"]
+    "types": [
+      "node",
+      "react"
+    ],
+    "paths": {
+      "expo-thermal-printer/escpos": [
+        "./src/pure.ts"
+      ]
+    }
   },
-  "include": ["src"]
+  "include": [
+    "src",
+    "examples"
+  ]
 }
