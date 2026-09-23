@@ -89,6 +89,18 @@ private val RECONNECT_DELAYS_MS = longArrayOf(2000, 3000, 5000, 10000, 15000)
 private const val RECONNECT_SLOW_AFTER_MS = 5 * 60 * 1000L
 private const val RECONNECT_SLOW_DELAY_MS = 60 * 1000L
 
+/**
+ * The heartbeat stays quiet for this long after any write. A print job
+ * arrives as many small writes with pauses between them (see printBytes in
+ * transport.ts), and the module's lock only covers one write at a time, so a
+ * probe could otherwise land between two chunks of the same job. Inside a
+ * raster image those 3 bytes are read as pixels and every following row
+ * shifts sideways: the bottom of a logo printed as two half logos swapped.
+ * Well above the pause between chunks, so a job in progress never gets a
+ * probe; during a job the writes themselves detect a dead link.
+ */
+private const val HEARTBEAT_QUIET_AFTER_WRITE_MS = 2000L
+
 /** ESC/POS real-time status request (DLE EOT 1): no paper feed, no cut, no
  * print -- printers that don't support it simply ignore it. Only the success
  * or failure of the WRITE itself is used here, never the reply. */
@@ -147,6 +159,9 @@ class ThermalPrinterModule : Module() {
    * without needing to track or interrupt a Thread reference directly.
    */
   private val heartbeatGeneration = AtomicInteger(0)
+
+  /** When the last print write finished; read and written under the module's lock. */
+  private var lastWriteAt = 0L
 
   /**
    * Identifies the current reconnect loop. Bumped by an explicit connect or
@@ -261,8 +276,9 @@ class ThermalPrinterModule : Module() {
   /**
    * Starts probing the live connection every HEARTBEAT_INTERVAL_MS. Runs on
    * its own thread because the probe write blocks; synchronizes on `this`
-   * (the same monitor as attemptConnect/closeQuietly/write) so a probe can
-   * never interleave its bytes with a real print job or a reconnect.
+   * (the same monitor as attemptConnect/closeQuietly/write) so a probe never
+   * splits a single write, and skips the probe right after a write so it never
+   * lands between the writes of one job either (HEARTBEAT_QUIET_AFTER_WRITE_MS).
    */
   private fun startHeartbeat() {
     val myGeneration = heartbeatGeneration.incrementAndGet()
@@ -276,6 +292,7 @@ class ThermalPrinterModule : Module() {
         val failedAddress = synchronized(this@ThermalPrinterModule) {
           if (heartbeatGeneration.get() != myGeneration) return@synchronized null
           val stream = outputStream ?: return@synchronized null
+          if (System.currentTimeMillis() - lastWriteAt < HEARTBEAT_QUIET_AFTER_WRITE_MS) return@synchronized null
           try {
             stream.write(HEARTBEAT_PROBE)
             stream.flush()
@@ -529,7 +546,8 @@ class ThermalPrinterModule : Module() {
       }
 
       // Synchronized against the same monitor as the heartbeat probe, so a
-      // probe can never land mid-ticket and corrupt what the printer sees.
+      // probe never splits this write; lastWriteAt keeps it out of the gaps
+      // between this write and the next chunk of the same job.
       var droppedAddress: String? = null
       val writeError = synchronized(this@ThermalPrinterModule) {
         val stream = outputStream ?: return@synchronized PrinterNotConnectedException()
@@ -547,6 +565,7 @@ class ThermalPrinterModule : Module() {
             offset += length
             if (offset < bytes.size) Thread.sleep(CHUNK_PAUSE_MS)
           }
+          lastWriteAt = System.currentTimeMillis()
           null
         } catch (error: Throwable) {
           droppedAddress = connectedAddress

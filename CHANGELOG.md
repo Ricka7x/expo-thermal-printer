@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.3
+
+- Android: the connection heartbeat no longer fires between the chunks of a print job. Its 3 bytes landing inside an image shifted the rest of the image sideways (a logo's bottom half printed as two swapped halves). It now stays quiet for 2 seconds after any write.
+
 ## 0.1.2
 
 - Releases are published from GitHub Actions through npm trusted publishing, with provenance, and get a GitHub Release.
