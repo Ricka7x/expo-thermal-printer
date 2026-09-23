@@ -73,6 +73,14 @@ private const val CONNECT_ATTEMPT_TIMEOUT_MS = 8000L
  */
 private const val CONNECT_TOTAL_TIMEOUT_MS = 15000L
 
+/**
+ * Waits between reconnect attempts after an involuntary drop, in order; the
+ * last one repeats. Short at first, because the usual cause is the printer
+ * being switched off and straight back on. Longer later, because each attempt
+ * against a printer that stays off pages the radio for several seconds.
+ */
+private val RECONNECT_DELAYS_MS = longArrayOf(2000, 3000, 5000, 10000, 15000)
+
 /** ESC/POS real-time status request (DLE EOT 1): no paper feed, no cut, no
  * print -- printers that don't support it simply ignore it. Only the success
  * or failure of the WRITE itself is used here, never the reply. */
@@ -132,6 +140,20 @@ class ThermalPrinterModule : Module() {
    */
   private val heartbeatGeneration = AtomicInteger(0)
 
+  /**
+   * Identifies the current reconnect loop. Bumped by an explicit connect or
+   * disconnect, and by starting a new loop, so a superseded loop stops and a
+   * socket it opens late is thrown away instead of installed.
+   */
+  private val reconnectGeneration = AtomicInteger(0)
+
+  /**
+   * Which socket type last connected (see createSocket), so reconnect
+   * attempts go straight to the one this printer accepts instead of paging
+   * the radio three times per attempt.
+   */
+  @Volatile private var lastWorkingTransport = 0
+
   private val adapter: BluetoothAdapter?
     get() {
       val context = appContext.reactContext ?: return null
@@ -144,13 +166,22 @@ class ThermalPrinterModule : Module() {
    * is a Java-side flag that only changes when *we* call connect()/close(), so a
    * printer powered off mid-session leaves it stuck reporting "connected" until
    * the next write() happens to fail. Android does notice the physical link drop
-   * (a baseband/ACL disconnect) and broadcasts it system-wide; listening for that
-   * is what makes the reported state match reality instead of lagging behind it.
+   * (a baseband/ACL disconnect) and broadcasts it; listening for that makes the
+   * reported state follow reality. The heartbeat is the backstop for phones
+   * that deliver the broadcast late or not at all.
    *
-   * The reverse matters just as much: the user turns the printer back on and
-   * expects it to just work, not to need a trip back to this screen. Android
-   * broadcasts the ACL reconnect too, so this reopens the socket automatically
-   * for whichever printer we were last actually using (lastKnownAddress).
+   * The receiver has to be EXPORTED. These broadcasts come from the Bluetooth
+   * app (com.android.bluetooth), which is a different process, and Android 12+
+   * refuses to deliver them to a NOT_EXPORTED receiver ("Permission Denial ...
+   * requires DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION" in logcat). That is
+   * safe: ACL_CONNECTED/DISCONNECTED are protected broadcasts that only the
+   * system can send, so no other app can spoof them.
+   *
+   * Only the disconnect is listened for. A printer never connects to the
+   * phone on its own; an ACL_CONNECTED for it is the echo of our own connect
+   * attempt, and reacting to it restarted the reconnect loop mid-attempt
+   * (seen on a Poco M3: the retry failed with "RFCOMM already opened").
+   * Getting the printer back is the reconnect loop's job alone.
    */
   private fun registerAclReceiver() {
     if (aclReceiver != null) return
@@ -158,34 +189,18 @@ class ThermalPrinterModule : Module() {
     val receiver = object : BroadcastReceiver() {
       override fun onReceive(receivedContext: Context, intent: Intent) {
         val device = IntentCompat.getParcelableExtra(intent, BluetoothDevice.EXTRA_DEVICE, BluetoothDevice::class.java) ?: return
-        when (intent.action) {
-          BluetoothDevice.ACTION_ACL_DISCONNECTED -> {
-            if (device.address != connectedAddress) return
-            val address = connectedAddress
-            closeQuietly()
-            if (address != null) {
-              sendEvent("onConnectionChanged", mapOf("address" to address, "connected" to false))
-            }
-          }
-          BluetoothDevice.ACTION_ACL_CONNECTED -> {
-            val target = lastKnownAddress ?: return
-            if (device.address != target) return
-            if (socket?.isConnected == true) return
-            // candidate.connect() blocks and sleeps between fallback attempts:
-            // never do that on the receiver's (main) thread.
-            Thread { attemptConnect(target) }.start()
-          }
-        }
+        if (intent.action != BluetoothDevice.ACTION_ACL_DISCONNECTED) return
+        val address = connectedAddress ?: return
+        if (device.address != address) return
+        handleInvoluntaryDrop(address)
       }
     }
     val filter = IntentFilter().apply {
       addAction(BluetoothDevice.ACTION_ACL_DISCONNECTED)
-      addAction(BluetoothDevice.ACTION_ACL_CONNECTED)
     }
-    ContextCompat.registerReceiver(context, receiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
+    ContextCompat.registerReceiver(context, receiver, filter, ContextCompat.RECEIVER_EXPORTED)
     aclReceiver = receiver
   }
-
   private fun unregisterAclReceiver() {
     val receiver = aclReceiver ?: return
     runCatching { appContext.reactContext?.unregisterReceiver(receiver) }
@@ -254,8 +269,7 @@ class ThermalPrinterModule : Module() {
           }
         }
         if (failedAddress != null) {
-          closeQuietly()
-          sendEvent("onConnectionChanged", mapOf("address" to failedAddress, "connected" to false))
+          handleInvoluntaryDrop(failedAddress)
           return@Thread
         }
       }
@@ -263,17 +277,139 @@ class ThermalPrinterModule : Module() {
   }
 
   /**
-   * The actual connect attempt: tried from the "connect" AsyncFunction, which
-   * throws whatever this returns so JS sees the detailed error, and from a
-   * background Thread when the ACL receiver notices the printer came back on
-   * its own -- that path has no promise to reject, so it just gets the same
-   * logic and ignores a null-vs-non-null result beyond "did it work".
-   * @Synchronized because both callers can race (a manual retry while an
-   * auto-reconnect from the ACL receiver is mid-attempt).
+   * The printer went away without being asked to (switched off, out of
+   * range, a failed write): report it and start trying to get it back.
+   */
+  private fun handleInvoluntaryDrop(address: String) {
+    // The ACL broadcast, the heartbeat and a failed write can all notice the
+    // same drop; only the first one to get here acts on it.
+    val wasConnected = synchronized(this) {
+      val current = connectedAddress == address
+      if (current) closeQuietly()
+      current
+    }
+    if (!wasConnected) return
+    sendEvent("onConnectionChanged", mapOf("address" to address, "connected" to false))
+    startReconnectLoop()
+  }
+
+  /**
+   * Keeps trying the last printer until it answers, an explicit connect or
+   * disconnect supersedes the loop, or the module is destroyed. A printer
+   * doesn't announce that it's back, so polling is the only way to notice.
+   * The blocking socket connect runs outside the module's lock, so writes,
+   * status reads and a disconnect() are never held up by an attempt.
+   */
+  private fun startReconnectLoop() {
+    val generation = reconnectGeneration.incrementAndGet()
+    val target = lastKnownAddress ?: return
+    Thread {
+      var attempt = 0
+      while (reconnectGeneration.get() == generation) {
+        val delay = RECONNECT_DELAYS_MS[minOf(attempt, RECONNECT_DELAYS_MS.size - 1)]
+        attempt++
+        try {
+          Thread.sleep(delay)
+        } catch (_: InterruptedException) {
+          return@Thread
+        }
+        if (reconnectGeneration.get() != generation) return@Thread
+        if (tryReconnectOnce(target, generation)) return@Thread
+      }
+    }.apply { isDaemon = true; start() }
+  }
+
+  /** One reconnect attempt. True when connected (or no longer wanted), so the loop stops. */
+  @SuppressLint("MissingPermission")
+  private fun tryReconnectOnce(address: String, generation: Int): Boolean {
+    val adapter = adapter ?: return false
+    if (!adapter.isEnabled || !hasConnectPermission()) return false
+    if (socket != null) return true
+    val device = adapter.bondedDevices?.firstOrNull { it.address == address } ?: return false
+    val candidate = createSocket(device, lastWorkingTransport) ?: return false
+    if (connectWithTimeout(candidate) != null) return false
+
+    synchronized(this) {
+      val stillWanted = reconnectGeneration.get() == generation && lastKnownAddress == address && socket == null
+      if (!stillWanted) {
+        runCatching { candidate.close() }
+        return true
+      }
+      install(candidate, address)
+    }
+    return true
+  }
+
+  /**
+   * The socket types to try, most to least strict. Cheap 58mm printers
+   * frequently do not publish an SDP record for SPP, in which case the
+   * standard secure socket is refused with "Service discovery failed" or
+   * "Connection refused": 0 is secure SPP, 1 insecure SPP (no authentication
+   * or encryption on the link), 2 RFCOMM channel 1 directly, which is what
+   * these printers actually listen on.
+   */
+  @SuppressLint("MissingPermission")
+  private fun createSocket(device: BluetoothDevice, transport: Int): BluetoothSocket? = runCatching {
+    when (transport) {
+      0 -> device.createRfcommSocketToServiceRecord(SPP_UUID)
+      1 -> device.createInsecureRfcommSocketToServiceRecord(SPP_UUID)
+      else -> {
+        val method = device.javaClass.getMethod("createRfcommSocket", Int::class.javaPrimitiveType)
+        method.invoke(device, 1) as? BluetoothSocket
+      }
+    }
+  }.getOrNull()
+
+  /**
+   * candidate.connect(), aborted if it blocks past CONNECT_ATTEMPT_TIMEOUT_MS:
+   * closing the socket from another thread makes a blocked connect() throw.
+   * `settled` decides the race between the two: whichever side flips it first
+   * wins, so a connect that succeeds just as the budget runs out is never
+   * closed behind our back. Returns null on success; on failure the socket is
+   * closed and the error returned.
+   */
+  @SuppressLint("MissingPermission")
+  private fun connectWithTimeout(candidate: BluetoothSocket): Throwable? {
+    val settled = AtomicBoolean(false)
+    val watchdog = Thread {
+      try {
+        Thread.sleep(CONNECT_ATTEMPT_TIMEOUT_MS)
+        if (settled.compareAndSet(false, true)) runCatching { candidate.close() }
+      } catch (_: InterruptedException) {
+      }
+    }.apply { isDaemon = true; start() }
+    return try {
+      candidate.connect()
+      if (!settled.compareAndSet(false, true)) throw IOException("Connect timed out")
+      watchdog.interrupt()
+      null
+    } catch (error: Throwable) {
+      settled.set(true)
+      watchdog.interrupt()
+      runCatching { candidate.close() }
+      error
+    }
+  }
+
+  /** Makes a connected socket the live one. Call with the module's lock held. */
+  private fun install(candidate: BluetoothSocket, address: String) {
+    socket = candidate
+    outputStream = candidate.outputStream
+    connectedAddress = address
+    lastKnownAddress = address
+    sendEvent("onConnectionChanged", mapOf("address" to address, "connected" to true))
+    startHeartbeat()
+  }
+
+  /**
+   * An explicit connect, from the "connect" AsyncFunction, which throws
+   * whatever this returns so JS sees the detailed error. It supersedes any
+   * reconnect loop. @Synchronized so two explicit connects can't race.
    */
   @Synchronized
   @SuppressLint("MissingPermission")
   private fun attemptConnect(address: String): Throwable? {
+    reconnectGeneration.incrementAndGet()
     val adapter = adapter ?: return BluetoothUnavailableException()
     if (!adapter.isEnabled) return BluetoothUnavailableException()
     if (!hasConnectPermission()) return BluetoothPermissionException()
@@ -294,65 +430,21 @@ class ThermalPrinterModule : Module() {
     // If a future change adds scanning, this needs revisiting along with the
     // BLUETOOTH_SCAN permission.
 
-    // Cheap 58mm printers frequently do not publish an SDP record for SPP, in
-    // which case the standard secure socket is refused with "Service discovery
-    // failed" or "Connection refused". Try progressively more permissive
-    // transports before giving up: secure SPP, then insecure SPP (no
-    // authentication/encryption on the link), then RFCOMM channel 1 directly,
-    // which is what these printers actually listen on.
-    val candidates = buildList {
-      runCatching { add(device.createRfcommSocketToServiceRecord(SPP_UUID)) }
-      runCatching { add(device.createInsecureRfcommSocketToServiceRecord(SPP_UUID)) }
-      runCatching {
-        val method = device.javaClass.getMethod("createRfcommSocket", Int::class.javaPrimitiveType)
-        (method.invoke(device, 1) as? BluetoothSocket)?.let { add(it) }
-      }
-    }
-
-    if (candidates.isEmpty()) {
-      return PrinterConnectionException(address, null)
-    }
-
     var lastError: Throwable? = null
     val deadline = System.currentTimeMillis() + CONNECT_TOTAL_TIMEOUT_MS
-    for (candidate in candidates) {
-      if (System.currentTimeMillis() >= deadline) {
-        runCatching { candidate.close() }
-        continue
-      }
-      // Aborts connect() below if it blocks past its budget: close() makes a
-      // blocked connect() throw IOException, which is handled like any failure.
-      // `settled` decides the race between the two: whichever side flips it
-      // first wins, so a connect that succeeds just as the budget runs out is
-      // never closed behind our back.
-      val settled = AtomicBoolean(false)
-      val watchdog = Thread {
-        try {
-          Thread.sleep(CONNECT_ATTEMPT_TIMEOUT_MS)
-          if (settled.compareAndSet(false, true)) runCatching { candidate.close() }
-        } catch (_: InterruptedException) {
-        }
-      }.apply { isDaemon = true; start() }
-      try {
-        candidate.connect()
-        if (!settled.compareAndSet(false, true)) throw IOException("Connect timed out")
-        watchdog.interrupt()
-        socket = candidate
-        outputStream = candidate.outputStream
-        connectedAddress = address
-        lastKnownAddress = address
-        sendEvent("onConnectionChanged", mapOf("address" to address, "connected" to true))
-        startHeartbeat()
+    for (transport in 0..2) {
+      if (System.currentTimeMillis() >= deadline) break
+      val candidate = createSocket(device, transport) ?: continue
+      val error = connectWithTimeout(candidate)
+      if (error == null) {
+        lastWorkingTransport = transport
+        install(candidate, address)
         return null
-      } catch (error: Throwable) {
-        settled.set(true)
-        watchdog.interrupt()
-        lastError = error
-        runCatching { candidate.close() }
-        // A short pause lets the printer settle before the next attempt: these
-        // units frequently accept on the second try but not the first.
-        Thread.sleep(300)
       }
+      lastError = error
+      // A short pause lets the printer settle before the next attempt: these
+      // units frequently accept on the second try but not the first.
+      Thread.sleep(300)
     }
 
     return PrinterConnectionException(address, lastError)
@@ -415,6 +507,7 @@ class ThermalPrinterModule : Module() {
 
       // Synchronized against the same monitor as the heartbeat probe, so a
       // probe can never land mid-ticket and corrupt what the printer sees.
+      var droppedAddress: String? = null
       val writeError = synchronized(this@ThermalPrinterModule) {
         val stream = outputStream ?: return@synchronized PrinterNotConnectedException()
         try {
@@ -433,23 +526,21 @@ class ThermalPrinterModule : Module() {
           }
           null
         } catch (error: Throwable) {
-          val address = connectedAddress
-          closeQuietly()
-          if (address != null) {
-            sendEvent("onConnectionChanged", mapOf("address" to address, "connected" to false))
-          }
+          droppedAddress = connectedAddress
           PrinterWriteException(error)
         }
       }
+      droppedAddress?.let { handleInvoluntaryDrop(it) }
       if (writeError != null) throw writeError
       true
     }
 
     AsyncFunction("disconnect") {
+      // The only voluntary path: stop trying to reconnect to this printer.
+      reconnectGeneration.incrementAndGet()
+      lastKnownAddress = null
       val address = connectedAddress
       closeQuietly()
-      // The only voluntary path: stop trying to reconnect to this printer.
-      lastKnownAddress = null
       if (address != null) {
         sendEvent("onConnectionChanged", mapOf("address" to address, "connected" to false))
       }
@@ -457,6 +548,7 @@ class ThermalPrinterModule : Module() {
     }
 
     OnDestroy {
+      reconnectGeneration.incrementAndGet()
       unregisterAclReceiver()
       closeQuietly()
     }

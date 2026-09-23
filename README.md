@@ -11,14 +11,14 @@ Receipt layouts are up to each app; this package handles the connection and the 
 | Transport | Bluetooth Classic (SPP/RFCOMM) | Bluetooth Low Energy (GATT) |
 | Finding the printer | Paired once in Android's Bluetooth settings, listed instantly | BLE scan from the app |
 | `address` | MAC address | CoreBluetooth peripheral UUID (stable per phone) |
-| Auto-reconnect | Yes (ACL broadcast + 4s heartbeat) | Yes (pending reconnect after a drop) |
+| Auto-reconnect | Yes: drop seen via the ACL broadcast (4s heartbeat as backup), then retried every 2 to 15s | Yes (pending reconnect after a drop) |
 
 **iOS only works with printers that expose BLE.** iOS doesn't let apps use Bluetooth Classic SPP unless the accessory is MFi certified, and cheap printers aren't. Many 58mm printers are dual mode (Classic + BLE) and work on both platforms. A Classic-only printer works on Android but will never show up in an iOS scan. Check the printer's spec sheet for "BLE" or "Bluetooth 4.0 dual mode" before buying for iOS.
 
 ## What's included
 
 - **Native modules:** Kotlin (Android) and Swift/CoreBluetooth (iOS). Both only move bytes; they never format anything.
-  - Android: connects over SPP with fallbacks (secure → insecure → RFCOMM channel 1) and a time limit, so a paired printer that's switched off fails in seconds instead of hanging. Writes in small flushed chunks, detects power-off, reconnects when the printer comes back.
+  - Android: connects over SPP with fallbacks (secure → insecure → RFCOMM channel 1) and a time limit, so a paired printer that's switched off fails in seconds instead of hanging. Writes in small flushed chunks, detects power-off, and keeps retrying until the printer comes back (printers never reconnect to the phone on their own).
   - iOS: scans, connects, and picks the print characteristic from a list of known ones (`18F0/2AF1` first, then ISSC, `E7810A71…`, `FF00`, `FFE0`, then any writable one). Writes are acknowledged (write with response) whenever the printer supports it, at most 100 bytes each, so the printer's buffer can't be overrun. Reconnects after a drop.
 - **Transport (`transport.ts`):** permissions, `findPrinters`, connect/disconnect, connection events, and `printBytes`, which paces sends so the printer's small buffer never overflows.
 - **`EscPosBuilder` (`escpos.ts`):** pure TypeScript, no dependencies. Alignment, bold, sizes, word wrapping, tear lines, raster images, code page 850 with Spanish accents, ASCII fallback. Also `wrap`, `twoColumns` and `fitColumns` for laying out rows.
@@ -176,4 +176,4 @@ npm run check     # typecheck, tests (Node, no hardware) and build
 ## Status
 
 - Android: tested on real phones with an MP58C6 58mm printer.
-- iOS: tested on an iPhone 11 with the same MP58C6, which is dual mode and shows up in the BLE scan.
+- iOS: tested on an iPhone with the same MP58C6, which is dual mode and shows up in the BLE scan.

@@ -14,3 +14,4 @@ First release.
 - `align()` throws when called mid-line.
 - iOS writes with response when the printer supports it, at most 100 bytes per write, to a characteristic chosen from a list of known printer ones.
 - Android connects give up after 8 seconds per attempt and 15 seconds overall.
+- Android: the ACL receiver is exported, so Bluetooth disconnect broadcasts actually arrive (Android 12+ blocked them before). After an involuntary drop a reconnect loop retries every 2 to 15 seconds until the printer is back.
